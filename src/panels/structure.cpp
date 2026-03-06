@@ -439,6 +439,7 @@ TStructurePanel::TStructurePanel(const TRect &bounds)
     flags = 0; // no move, zoom, close — docked panel
     growMode = 0;
     state &= ~sfShadow; // no shadow — flush with desktop
+    options |= ofFirstClick; // pass clicks through immediately
 
     TRect r = getExtent();
     r.grow(-1, -1);
@@ -576,6 +577,14 @@ void TStructurePanel::sizeLimits(TPoint &min, TPoint &max)
 
 TPalette &TStructurePanel::getPalette() const
 {
-    static TPalette pal(cpGrayDialog, sizeof(cpGrayDialog) - 1);
+    static char customPal[] =
+        "\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2A\x2B\x2C\x2D\x2E\x2F"
+        "\x30\x31\x32\x33\x34\x35\x36\x37\x38"
+        "\x20"  // 26: list normal (black on light gray)
+        "\x06"  // 27: list focused (menu selected highlight)
+        "\x21"  // 28: list selected (white on light gray)
+        "\x20"  // 29: list divider
+        "\x3D\x3E\x3F";
+    static TPalette pal(customPal, sizeof(customPal) - 1);
     return pal;
 }

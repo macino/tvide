@@ -161,9 +161,12 @@ void TFileTreePanel::toggleOrOpen()
         if (idx < (int)flatList.size())
             listBox->focusItem(idx);
     } else {
-        // Open file
+        // Open file — copy path to static buffer for safe message passing
+        static char pathBuf[PATH_MAX];
+        strncpy(pathBuf, node->fullPath.c_str(), PATH_MAX - 1);
+        pathBuf[PATH_MAX - 1] = '\0';
         message(TProgram::application, evCommand, cmFileTreeOpen,
-                (void *)node->fullPath.c_str());
+                (void *)pathBuf);
     }
 }
 
@@ -177,6 +180,7 @@ TFileTreePanel::TFileTreePanel(const TRect &bounds)
     flags = 0; // no move, zoom, close — docked panel
     growMode = 0;
     state &= ~sfShadow;
+    options |= ofFirstClick; // pass clicks through immediately
 
     TRect r = getExtent();
     r.grow(-1, -1);
@@ -206,7 +210,17 @@ TFileTreePanel::~TFileTreePanel()
 
 TPalette &TFileTreePanel::getPalette() const
 {
-    static TPalette pal(cpGrayDialog, sizeof(cpGrayDialog) - 1);
+    // Custom 32-entry palette based on cpGrayDialog
+    // Entries 26-29 (TListViewer) remapped to light gray colors
+    static char customPal[] =
+        "\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2A\x2B\x2C\x2D\x2E\x2F"
+        "\x30\x31\x32\x33\x34\x35\x36\x37\x38"
+        "\x20"  // 26: list normal (black on light gray)
+        "\x06"  // 27: list focused (menu selected highlight)
+        "\x21"  // 28: list selected (white on light gray)
+        "\x20"  // 29: list divider
+        "\x3D\x3E\x3F";
+    static TPalette pal(customPal, sizeof(customPal) - 1);
     return pal;
 }
 
@@ -256,9 +270,42 @@ void TFileTreePanel::handleEvent(TEvent &event)
 
     TWindow::handleEvent(event);
 
-    if (event.what == evKeyDown && event.keyDown.keyCode == kbEnter) {
-        toggleOrOpen();
-        clearEvent(event);
+    if (event.what == evKeyDown) {
+        switch (event.keyDown.keyCode) {
+        case kbEnter:
+            toggleOrOpen();
+            clearEvent(event);
+            break;
+        case kbRight: {
+            // Expand directory
+            int idx = listBox->focused;
+            if (idx >= 0 && idx < (int)flatList.size()) {
+                FileNode *node = flatList[idx];
+                if (node->isDir && !node->expanded) {
+                    node->expanded = true;
+                    loadChildren(*node);
+                    rebuildFlatList();
+                    listBox->focusItem(idx);
+                    clearEvent(event);
+                }
+            }
+            break;
+        }
+        case kbLeft: {
+            // Collapse directory
+            int idx = listBox->focused;
+            if (idx >= 0 && idx < (int)flatList.size()) {
+                FileNode *node = flatList[idx];
+                if (node->isDir && node->expanded) {
+                    node->expanded = false;
+                    rebuildFlatList();
+                    listBox->focusItem(idx);
+                    clearEvent(event);
+                }
+            }
+            break;
+        }
+        }
     }
 
     if (event.what == evBroadcast &&
