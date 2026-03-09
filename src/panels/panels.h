@@ -112,6 +112,13 @@ struct SymbolInfo {
 // Parse symbols from the current editor
 void parseStructure(TSyntaxEditor *editor, std::vector<SymbolInfo> &syms);
 
+// Custom list box with blue focused item
+class TStructureListBox : public TListBox {
+public:
+    TStructureListBox(const TRect &bounds, ushort aNumCols, TScrollBar *aScrollBar);
+    virtual void draw() override;
+};
+
 // Structure panel (right sidebar — docked) — shows classes, functions, etc.
 class TStructurePanel : public TWindow {
 public:
@@ -127,7 +134,7 @@ public:
     void refresh(TSyntaxEditor *editor);
 
 private:
-    TListBox *listBox;
+    TStructureListBox *listBox;
     TScrollBar *scrollBar;
     TUnsortedStringCollection *items;
     std::vector<SymbolInfo> symbols; // parallel to list items

@@ -4,6 +4,69 @@
 #include <algorithm>
 #include <functional>
 
+// ── TStructureListBox (blue focused item) ───────────────────────────────
+
+TStructureListBox::TStructureListBox(const TRect &bounds, ushort aNumCols,
+                                     TScrollBar *aScrollBar)
+    : TListBox(bounds, aNumCols, aScrollBar)
+{
+}
+
+void TStructureListBox::draw()
+{
+    TColorAttr normalColor, focusedColor, selectedColor, color;
+    short colWidth, curCol, indent;
+    TDrawBuffer b;
+
+    // Blue on light gray for focused item
+    const TColorAttr blueFocused = 0x71;
+
+    if ((state & (sfSelected | sfActive)) == (sfSelected | sfActive)) {
+        normalColor = getColor(1);
+        focusedColor = blueFocused;
+        selectedColor = getColor(4);
+    } else {
+        normalColor = getColor(2);
+        selectedColor = getColor(4);
+        focusedColor = normalColor;
+    }
+
+    if (hScrollBar != 0)
+        indent = hScrollBar->value;
+    else
+        indent = 0;
+
+    colWidth = size.x / numCols + 1;
+    for (short i = 0; i < size.y; i++) {
+        for (short j = 0; j < numCols; j++) {
+            short item = j * size.y + i + topItem;
+            curCol = j * colWidth;
+
+            if ((state & (sfSelected | sfActive)) == (sfSelected | sfActive) &&
+                focused == item && range > 0) {
+                color = focusedColor;
+                setCursor(curCol + 1, i);
+            } else if (item < range && isSelected(item)) {
+                color = selectedColor;
+            } else {
+                color = normalColor;
+            }
+
+            b.moveChar(curCol, ' ', color, colWidth);
+            if (item < range) {
+                if (indent < 255) {
+                    char text[256];
+                    getText(text, item, 255);
+                    b.moveStr(curCol + 1, text, color, colWidth, indent);
+                }
+            }
+
+            b.moveChar(curCol + colWidth - 1, '\xB3', getColor(5), 1);
+        }
+        writeLine(0, i, size.x, 1, b);
+    }
+}
+
 // ── Symbol types ────────────────────────────────────────────────────────
 
 static const char *symbolIcon(SymbolKind kind)
@@ -453,7 +516,7 @@ TStructurePanel::TStructurePanel(const TRect &bounds)
     insert(scrollBar);
 
     r.b.x--;
-    listBox = new TListBox(r, 1, scrollBar);
+    listBox = new TStructureListBox(r, 1, scrollBar);
     listBox->growMode = gfGrowHiX | gfGrowHiY;
     insert(listBox);
 
