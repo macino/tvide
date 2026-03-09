@@ -501,8 +501,10 @@ TStructurePanel::TStructurePanel(const TRect &bounds)
 {
     flags = 0; // no move, zoom, close — docked panel
     growMode = 0;
-    state &= ~sfShadow; // no shadow — flush with desktop
-    options |= ofFirstClick; // pass clicks through immediately
+    state &= ~sfShadow;
+    options |= ofFirstClick;
+    options &= ~ofTopSelect; // allow setCurrent so panel receives keyboard events
+    eventMask |= evMouseWheel; // receive mouse wheel for scrolling
 
     TRect r = getExtent();
     r.grow(-1, -1);
@@ -609,6 +611,17 @@ void TStructurePanel::handleEvent(TEvent &event)
             clearEvent(event);
             return;
         }
+    }
+
+    // Handle mouse wheel scrolling
+    if (event.what == evMouseWheel) {
+        int delta = (event.mouse.wheel == mwUp) ? -3 : 3;
+        int newFocus = std::max(0, std::min((int)listBox->range - 1,
+                                             listBox->focused + delta));
+        listBox->focusItem(newFocus);
+        listBox->drawView();
+        clearEvent(event);
+        return;
     }
 
     // Handle keyboard navigation before TWindow dispatches to subviews
