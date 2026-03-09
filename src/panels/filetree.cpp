@@ -342,16 +342,49 @@ void TFileTreePanel::handleEvent(TEvent &event)
         }
     }
 
-    TWindow::handleEvent(event);
-
+    // Handle keyboard navigation before TWindow dispatches to subviews
     if (event.what == evKeyDown) {
         switch (event.keyDown.keyCode) {
         case kbEnter:
             toggleOrOpen();
             clearEvent(event);
-            break;
+            return;
+        case kbUp:
+            if (listBox->focused > 0) {
+                listBox->focusItem(listBox->focused - 1);
+                listBox->drawView();
+            }
+            clearEvent(event);
+            return;
+        case kbDown:
+            if (listBox->focused < listBox->range - 1) {
+                listBox->focusItem(listBox->focused + 1);
+                listBox->drawView();
+            }
+            clearEvent(event);
+            return;
+        case kbPgUp:
+            listBox->focusItem(std::max(0, listBox->focused - listBox->size.y));
+            listBox->drawView();
+            clearEvent(event);
+            return;
+        case kbPgDn:
+            listBox->focusItem(std::min((int)listBox->range - 1,
+                               listBox->focused + listBox->size.y));
+            listBox->drawView();
+            clearEvent(event);
+            return;
+        case kbHome:
+            listBox->focusItem(0);
+            listBox->drawView();
+            clearEvent(event);
+            return;
+        case kbEnd:
+            listBox->focusItem(listBox->range - 1);
+            listBox->drawView();
+            clearEvent(event);
+            return;
         case kbRight: {
-            // Expand directory
             int idx = listBox->focused;
             if (idx >= 0 && idx < (int)flatList.size()) {
                 FileNode *node = flatList[idx];
@@ -360,13 +393,12 @@ void TFileTreePanel::handleEvent(TEvent &event)
                     loadChildren(*node);
                     rebuildFlatList();
                     listBox->focusItem(idx);
-                    clearEvent(event);
                 }
             }
-            break;
+            clearEvent(event);
+            return;
         }
         case kbLeft: {
-            // Collapse directory
             int idx = listBox->focused;
             if (idx >= 0 && idx < (int)flatList.size()) {
                 FileNode *node = flatList[idx];
@@ -374,13 +406,15 @@ void TFileTreePanel::handleEvent(TEvent &event)
                     node->expanded = false;
                     rebuildFlatList();
                     listBox->focusItem(idx);
-                    clearEvent(event);
                 }
             }
-            break;
+            clearEvent(event);
+            return;
         }
         }
     }
+
+    TWindow::handleEvent(event);
 
     if (event.what == evBroadcast &&
         event.message.command == cmListItemSelected) {
