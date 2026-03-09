@@ -6,6 +6,79 @@
 #include <cstring>
 #include <algorithm>
 
+// ── TFileTreeListBox (colors directories in blue) ───────────────────────
+
+TFileTreeListBox::TFileTreeListBox(const TRect &bounds, ushort aNumCols,
+                                   TScrollBar *aScrollBar,
+                                   std::vector<FileNode *> &flatListRef)
+    : TListBox(bounds, aNumCols, aScrollBar),
+      flatList(flatListRef)
+{
+}
+
+void TFileTreeListBox::draw()
+{
+    TColorAttr normalColor, focusedColor, selectedColor, color;
+    short colWidth, curCol, indent;
+    TDrawBuffer b;
+
+    // Dark blue on light gray for directories
+    const TColorAttr dirColor = 0x71;
+
+    if ((state & (sfSelected | sfActive)) == (sfSelected | sfActive)) {
+        normalColor = getColor(1);
+        focusedColor = getColor(3);
+        selectedColor = getColor(4);
+    } else {
+        normalColor = getColor(2);
+        selectedColor = getColor(4);
+        focusedColor = normalColor;
+    }
+
+    if (hScrollBar != 0)
+        indent = hScrollBar->value;
+    else
+        indent = 0;
+
+    colWidth = size.x / numCols + 1;
+    for (short i = 0; i < size.y; i++) {
+        for (short j = 0; j < numCols; j++) {
+            short item = j * size.y + i + topItem;
+            curCol = j * colWidth;
+
+            bool isFocused = false;
+            if ((state & (sfSelected | sfActive)) == (sfSelected | sfActive) &&
+                focused == item && range > 0) {
+                color = focusedColor;
+                setCursor(curCol + 1, i);
+                isFocused = true;
+            } else if (item < range && isSelected(item)) {
+                color = selectedColor;
+            } else {
+                color = normalColor;
+            }
+
+            // For non-focused directory items, use blue color
+            bool isDir = (item >= 0 && item < (short)flatList.size() &&
+                          flatList[item] && flatList[item]->isDir);
+            if (isDir && !isFocused)
+                color = dirColor;
+
+            b.moveChar(curCol, ' ', color, colWidth);
+            if (item < range) {
+                if (indent < 255) {
+                    char text[256];
+                    getText(text, item, 255);
+                    b.moveStr(curCol + 1, text, color, colWidth, indent);
+                }
+            }
+
+            b.moveChar(curCol + colWidth - 1, '\xB3', getColor(5), 1);
+        }
+        writeLine(0, i, size.x, 1, b);
+    }
+}
+
 // ── File icon helper ────────────────────────────────────────────────────
 
 const char *TFileTreePanel::fileIcon(const std::string &name, bool isDir, bool expanded)
@@ -194,7 +267,7 @@ TFileTreePanel::TFileTreePanel(const TRect &bounds)
     insert(scrollBar);
 
     r.b.x--;
-    listBox = new TListBox(r, 1, scrollBar);
+    listBox = new TFileTreeListBox(r, 1, scrollBar, flatList);
     listBox->growMode = gfGrowHiX | gfGrowHiY;
     insert(listBox);
 

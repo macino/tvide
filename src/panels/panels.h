@@ -31,6 +31,19 @@ struct FileNode {
     std::vector<FileNode> children;
 };
 
+// Forward declaration
+class TFileTreePanel;
+
+// Custom list box that colors directories in blue
+class TFileTreeListBox : public TListBox {
+public:
+    TFileTreeListBox(const TRect &bounds, ushort aNumCols, TScrollBar *aScrollBar,
+                     std::vector<FileNode *> &flatListRef);
+    virtual void draw() override;
+private:
+    std::vector<FileNode *> &flatList;
+};
+
 // File tree panel (left sidebar — docked)
 class TFileTreePanel : public TWindow {
 public:
@@ -45,7 +58,7 @@ public:
     const std::string &getCurrentDir() const { return rootPath; }
 
 private:
-    TListBox *listBox;
+    TFileTreeListBox *listBox;
     TScrollBar *scrollBar;
     TUnsortedStringCollection *fileList;
     std::string rootPath;
