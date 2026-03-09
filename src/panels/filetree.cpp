@@ -58,10 +58,11 @@ void TFileTreeListBox::draw()
                 color = normalColor;
             }
 
-            // For non-focused directory items, use blue color
-            bool isDir = (item >= 0 && item < (short)flatList.size() &&
-                          flatList[item] && flatList[item]->isDir);
-            if (isDir && !isFocused)
+            // Expanded directories shown in blue
+            bool isExpandedDir = (item >= 0 && item < (short)flatList.size() &&
+                          flatList[item] && flatList[item]->isDir &&
+                          flatList[item]->expanded);
+            if (isExpandedDir && !isFocused)
                 color = dirColor;
 
             b.moveChar(curCol, ' ', color, colWidth);
