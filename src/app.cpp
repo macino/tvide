@@ -250,6 +250,7 @@ TVIDEApp::TVIDEApp(int argc, char **argv) :
     messagePanel(nullptr),
     structurePanel(nullptr),
     lastEditorWindow(nullptr),
+    lastStructEditor(nullptr),
     fileTreeWidth(28),
     structureWidth(30)
 {
@@ -450,6 +451,8 @@ void TVIDEApp::gotoLine()
         int line = atoi(buf);
         if (line > 0) {
             auto *e = w->getEditor();
+            int totalLines = e->getTotalLines();
+            if (line > totalLines) line = totalLines; // M4: clamp to last line
             // Navigate to line: count newlines
             uint pos = 0;
             int curLine = 1;
@@ -470,10 +473,80 @@ void TVIDEApp::gotoLine()
 void TVIDEApp::findInFiles()
 {
     TDialog *d = createFindInFilesDialog();
-    char data[512] = {0};
-    if (execDialog(d, data) == cmOK) {
-        if (messagePanel)
-            messagePanel->addMessage("Find in files not yet fully implemented.");
+    // Data layout: searchInput(256) + pathInput(256) + checkboxes(ushort)
+    struct {
+        char search[257]; // TInputLine: 1 byte length prefix + 256 chars
+        char path[257];
+        ushort options;
+    } data;
+    memset(&data, 0, sizeof(data));
+
+    // Pre-fill path with project or cwd
+    char cwd[MAXPATH] = {};
+    if (fileTreePanel && !fileTreePanel->getCurrentDir().empty())
+        strncpy(cwd, fileTreePanel->getCurrentDir().c_str(), MAXPATH - 1);
+    else
+        getcwd(cwd, sizeof(cwd));
+    strncpy(data.path + 1, cwd, 255);
+    data.path[0] = (char)strlen(data.path + 1);
+    data.options = 0x02; // recursive by default
+
+    if (execDialog(d, &data) == cmOK) {
+        std::string searchText(data.search + 1, (unsigned char)data.search[0]);
+        std::string searchPath(data.path + 1, (unsigned char)data.path[0]);
+        bool caseSensitive = (data.options & 0x01) != 0;
+        bool recursive = (data.options & 0x02) != 0;
+
+        if (searchText.empty()) return;
+        if (searchPath.empty()) searchPath = ".";
+
+        if (messagePanel) {
+            messagePanel->clear();
+            messagePanel->addMessage("Searching for: " + searchText);
+        }
+
+        // Build grep command
+        std::string cmd = "grep -n";
+        if (!caseSensitive) cmd += " -i";
+        if (recursive) cmd += " -r";
+        cmd += " --include='*.*' -- ";
+        // Escape search text for shell
+        cmd += "'";
+        for (char c : searchText) {
+            if (c == '\'') cmd += "'\\''";
+            else cmd += c;
+        }
+        cmd += "' '";
+        for (char c : searchPath) {
+            if (c == '\'') cmd += "'\\''";
+            else cmd += c;
+        }
+        cmd += "' 2>/dev/null | head -500";
+
+        FILE *fp = popen(cmd.c_str(), "r");
+        if (!fp) {
+            if (messagePanel)
+                messagePanel->addMessage("Error: could not run search.");
+            return;
+        }
+
+        char line[1024];
+        int count = 0;
+        while (fgets(line, sizeof(line), fp)) {
+            // Remove trailing newline
+            int len = strlen(line);
+            if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+            if (messagePanel)
+                messagePanel->addMessage(line);
+            count++;
+        }
+        pclose(fp);
+
+        if (messagePanel) {
+            char summary[128];
+            snprintf(summary, sizeof(summary), "Found %d match%s.", count, count == 1 ? "" : "es");
+            messagePanel->addMessage(summary);
+        }
     }
 }
 
@@ -481,22 +554,74 @@ void TVIDEApp::findInFiles()
 
 void TVIDEApp::winCloseAll()
 {
-    TView *v = deskTop->last;
-    while (v) {
-        TView *next = v->prev();
-        auto *w = dynamic_cast<TSyntaxEditWindow *>(v);
-        if (w)
-            w->close();
-        if (next == deskTop->last)
-            break;
-        v = next;
+    // M1: Collect all editor windows first, then close — safe iteration
+    std::vector<TSyntaxEditWindow *> editors;
+    TView *v = deskTop->first();
+    if (v) {
+        TView *t = v;
+        do {
+            auto *w = dynamic_cast<TSyntaxEditWindow *>(t);
+            if (w) editors.push_back(w);
+            t = t->next;
+        } while (t != v);
     }
+    for (auto *w : editors)
+        w->close();
 }
 
 void TVIDEApp::winList()
 {
-    messageBox("Window list shows all open editor windows.",
-               mfInformation | mfOKButton);
+    // M2: Implement window list dialog
+    std::vector<TSyntaxEditWindow *> editors;
+    TView *v = deskTop->first();
+    if (v) {
+        TView *t = v;
+        do {
+            auto *w = dynamic_cast<TSyntaxEditWindow *>(t);
+            if (w) editors.push_back(w);
+            t = t->next;
+        } while (t != v);
+    }
+    if (editors.empty()) {
+        messageBox("No open editor windows.", mfInformation | mfOKButton);
+        return;
+    }
+
+    // Build list of window titles
+    auto *items = new TUnsortedStringCollection(editors.size() + 1, 5);
+    for (auto *w : editors) {
+        const char *title = w->getTitle(256);
+        items->insert(newStr(title ? title : "Untitled"));
+    }
+
+    // Create dialog
+    int dH = std::min((int)editors.size() + 6, (int)size.y - 4);
+    int dW = std::min(50, (int)size.x - 4);
+    auto *d = new TDialog(TRect(0, 0, dW, dH), "Window List");
+    d->options |= ofCentered;
+
+    TRect sr(dW - 2, 2, dW - 1, dH - 3);
+    auto *sb = new TScrollBar(sr);
+    d->insert(sb);
+
+    TRect lr(2, 2, dW - 2, dH - 3);
+    auto *lb = new TListBox(lr, 1, sb);
+    lb->newList(items);
+    d->insert(lb);
+
+    d->insert(new TButton(TRect(dW / 2 - 10, dH - 2, dW / 2, dH), "~S~witch", cmOK, bfDefault));
+    d->insert(new TButton(TRect(dW / 2 + 1, dH - 2, dW / 2 + 11, dH), "Cancel", cmCancel, bfNormal));
+    d->selectNext(False);
+
+    TView *p = validView(d);
+    if (!p) return;
+    ushort result = deskTop->execView(p);
+    int sel = lb->focused;
+    TObject::destroy(p);
+
+    if (result == cmOK && sel >= 0 && sel < (int)editors.size()) {
+        editors[sel]->select();
+    }
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────
@@ -592,27 +717,29 @@ void TVIDEApp::toolOptions()
     } data;
     memset(&data, 0, sizeof(data));
 
-    // Checkboxes: bit 0=lineNums, 1=syntax, 2=whitespace, 3=EOL, 4=autoIndent, 5=bracket, 6=useTabs
+    // Checkboxes: bit 0=lineNums, 1=syntax, 2=whitespace, 3=EOL, 4=autoIndent, 5=bracket, 6=useTabs, 7=autoClose
     data.checkboxes = 0;
-    if (settings.showLineNumbers)  data.checkboxes |= 0x01;
-    if (settings.syntaxHighlight)  data.checkboxes |= 0x02;
-    if (settings.showWhitespace)   data.checkboxes |= 0x04;
-    if (settings.showEOL)          data.checkboxes |= 0x08;
-    if (settings.autoIndent)       data.checkboxes |= 0x10;
-    if (settings.bracketMatch)     data.checkboxes |= 0x20;
-    if (settings.useTabs)          data.checkboxes |= 0x40;
+    if (settings.showLineNumbers)    data.checkboxes |= 0x01;
+    if (settings.syntaxHighlight)    data.checkboxes |= 0x02;
+    if (settings.showWhitespace)     data.checkboxes |= 0x04;
+    if (settings.showEOL)            data.checkboxes |= 0x08;
+    if (settings.autoIndent)         data.checkboxes |= 0x10;
+    if (settings.bracketMatch)       data.checkboxes |= 0x20;
+    if (settings.useTabs)            data.checkboxes |= 0x40;
+    if (settings.autoCloseBrackets)  data.checkboxes |= 0x80;
 
     snprintf(data.tabSize + 1, sizeof(data.tabSize) - 1, "%d", settings.tabSize);
     data.tabSize[0] = (char)strlen(data.tabSize + 1);
 
     if (execDialog(d, &data) == cmOK) {
-        settings.showLineNumbers  = (data.checkboxes & 0x01) != 0;
-        settings.syntaxHighlight  = (data.checkboxes & 0x02) != 0;
-        settings.showWhitespace   = (data.checkboxes & 0x04) != 0;
-        settings.showEOL          = (data.checkboxes & 0x08) != 0;
-        settings.autoIndent       = (data.checkboxes & 0x10) != 0;
-        settings.bracketMatch     = (data.checkboxes & 0x20) != 0;
-        settings.useTabs          = (data.checkboxes & 0x40) != 0;
+        settings.showLineNumbers    = (data.checkboxes & 0x01) != 0;
+        settings.syntaxHighlight    = (data.checkboxes & 0x02) != 0;
+        settings.showWhitespace     = (data.checkboxes & 0x04) != 0;
+        settings.showEOL            = (data.checkboxes & 0x08) != 0;
+        settings.autoIndent         = (data.checkboxes & 0x10) != 0;
+        settings.bracketMatch       = (data.checkboxes & 0x20) != 0;
+        settings.useTabs            = (data.checkboxes & 0x40) != 0;
+        settings.autoCloseBrackets  = (data.checkboxes & 0x80) != 0;
 
         int ts = atoi(data.tabSize + 1);
         if (ts >= 1 && ts <= 16) settings.tabSize = ts;
@@ -689,14 +816,23 @@ void TVIDEApp::projectOpen()
     d->insert(new TButton(TRect(26, 6, 38, 8), "Cancel", cmCancel, bfNormal));
     d->selectNext(False);
 
-    // Pre-fill with current working directory
+    // L3: Pre-fill with current working directory using TInputLine format (length-prefixed)
     char cwd[MAXPATH];
-    char dirBuf[MAXPATH + 1] = {};
-    if (getcwd(cwd, sizeof(cwd)))
-        std::strncpy(dirBuf, cwd, MAXPATH);
+    char dirBuf[MAXPATH + 2] = {};
+    if (getcwd(cwd, sizeof(cwd))) {
+        int len = strlen(cwd);
+        if (len > MAXPATH) len = MAXPATH;
+        dirBuf[0] = (char)len;
+        std::memcpy(dirBuf + 1, cwd, len);
+    }
 
-    if (execDialog(d, dirBuf) == cmOK && dirBuf[0])
-        projectOpen(std::string(dirBuf));
+    if (execDialog(d, dirBuf) == cmOK) {
+        // Extract from length-prefixed format
+        int len = (unsigned char)dirBuf[0];
+        std::string path(dirBuf + 1, len);
+        if (!path.empty())
+            projectOpen(path);
+    }
 }
 
 void TVIDEApp::projectClose()
@@ -711,6 +847,7 @@ void TVIDEApp::projectClose()
 void TVIDEApp::helpAbout()
 {
     TDialog *d = createAboutDialog();
+    if (!d) return; // L14: null check
     deskTop->execView(d);
     TObject::destroy(d);
 }
@@ -755,8 +892,28 @@ void TVIDEApp::idle()
     if (lastEditorWindow && lastEditorWindow->getGutter())
         lastEditorWindow->getGutter()->drawView();
 
+    // M10: Check for external file changes on the active editor
+    if (lastEditorWindow && lastEditorWindow->getEditor()) {
+        auto *ed = lastEditorWindow->getEditor();
+        if (ed->hasExternalChange()) {
+            ed->updateModTime(); // prevent repeated prompts
+            ushort result = messageBox(
+                mfConfirmation | mfYesButton | mfNoButton,
+                "%s has been modified externally. Reload?",
+                ed->fileName);
+            if (result == cmYes) {
+                // Re-read the file by closing and re-opening
+                const char *fn = ed->fileName;
+                char nameCopy[MAXPATH];
+                strncpy(nameCopy, fn, MAXPATH - 1);
+                nameCopy[MAXPATH - 1] = '\0';
+                lastEditorWindow->close();
+                openEditor(nameCopy, True);
+            }
+        }
+    }
+
     // Refresh structure panel when tracked editor changes
-    static TSyntaxEditor *lastStructEditor = nullptr;
     if (structurePanel && (structurePanel->state & sfVisible)) {
         TSyntaxEditor *cur = (lastEditorWindow && lastEditorWindow->getEditor())
                              ? lastEditorWindow->getEditor() : nullptr;

@@ -145,6 +145,7 @@ private:
     TMessagePanel *messagePanel;
     TStructurePanel *structurePanel;
     TSyntaxEditWindow *lastEditorWindow;  // last focused editor (for structure panel)
+    TSyntaxEditor *lastStructEditor;       // L13: tracks last editor used for structure panel
     int fileTreeWidth;     // persisted width for file tree panel
     int structureWidth;    // persisted width for structure panel
 };

@@ -19,6 +19,7 @@ struct EditorSettings {
     bool bracketMatch      = true;
     int  tabSize           = 4;
     bool useTabs           = true;    // false = insert spaces
+    bool autoCloseBrackets = true;    // auto-insert matching brackets/quotes
     char tabChar            = '\xAF'; // » visible tab
     char spaceChar          = '\xFA'; // · visible space
     char eolChar            = '\xAE'; // ¶ visible EOL
@@ -46,6 +47,15 @@ public:
     const char *getLanguageName() const;
 
     void matchBracket();
+    void toggleLineComment();
+    void duplicateLine();
+    void deleteLine();
+    uint findMatchingBracket();
+
+    // M10: External file change detection
+    time_t lastModTime = 0;
+    void updateModTime();
+    bool hasExternalChange() const;
 
     // Accessors for line number gutter
     int getTopLine() const { return delta.y; }
@@ -61,7 +71,8 @@ private:
 
     // Draw one line into a TDrawBuffer with syntax coloring
     void drawSyntaxLine(TDrawBuffer &b, uint linePtr, int hScroll,
-                        int width, TAttrPair baseColors, int lineNum);
+                        int width, TAttrPair baseColors, int lineNum,
+                        uint matchPos = 0xFFFFFFFF);
 
     // Helper: get line text from gap buffer
     int getLineText(uint lineStart, char *buf, int maxLen);

@@ -2,6 +2,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdio>
+#include <string>
+#include <sys/stat.h>
 
 // ── EditorSettings singleton ────────────────────────────────────────────
 
@@ -28,9 +30,29 @@ TSyntaxEditor::TSyntaxEditor(const TRect &bounds,
     std::string fn(aFileName.data(), aFileName.size());
     lexer.reset(SyntaxLexer::createForFile(fn));
     autoIndent = EditorSettings::instance().autoIndent;
+    updateModTime();
 }
 
 TSyntaxEditor::~TSyntaxEditor() {}
+
+// M10: Track file modification time
+void TSyntaxEditor::updateModTime()
+{
+    if (fileName[0]) {
+        struct stat st;
+        if (stat(fileName, &st) == 0)
+            lastModTime = st.st_mtime;
+    }
+}
+
+bool TSyntaxEditor::hasExternalChange() const
+{
+    if (!fileName[0] || lastModTime == 0) return false;
+    struct stat st;
+    if (stat(fileName, &st) == 0)
+        return st.st_mtime != lastModTime;
+    return false;
+}
 
 void TSyntaxEditor::setLexer(SyntaxLexer *newLexer)
 {
@@ -81,7 +103,7 @@ void TSyntaxEditor::rebuildLineStates()
     uint pos = 0;
     char lineBuf[4096];
 
-    while (pos <= bufLen) {
+    while (pos < bufLen) {
         int lineLen = getLineText(pos, lineBuf, sizeof(lineBuf));
         std::vector<Token> tokens;
         state = lexer->tokenizeLine(lineBuf, lineLen, state, tokens);
@@ -119,7 +141,8 @@ LexerState TSyntaxEditor::getStateForLine(int lineNum)
 
 void TSyntaxEditor::drawSyntaxLine(TDrawBuffer &b, uint linePtr,
                                    int hScroll, int width,
-                                   TAttrPair baseColors, int lineNum)
+                                   TAttrPair baseColors, int lineNum,
+                                   uint matchPos)
 {
     auto &settings = EditorSettings::instance();
     bool doSyntax = settings.syntaxHighlight && lexer;
@@ -162,9 +185,23 @@ void TSyntaxEditor::drawSyntaxLine(TDrawBuffer &b, uint linePtr,
     TColorAttr normalColor = doSyntax ? syntaxColors.normal : TColorAttr(baseColors);
     TColorAttr selColor(baseColors >> 8);
 
+    // M11: Bracket highlight color — bright cyan on same background
+    uint8_t biosNorm = normalColor.toBIOS();
+    TColorAttr bracketHighlight((biosNorm & 0xF0) | 0x0B); // light cyan fg
+
     // Whitespace color: dark cyan on same background as normal text
     uint8_t biosNormal = normalColor.toBIOS();
     TColorAttr wsColor((biosNormal & 0xF0) | 0x03);
+
+    // Compute which character offsets in this line should be bracket-highlighted
+    int bracketHL1 = -1, bracketHL2 = -1;
+    if (matchPos < bufLen) {
+        uint lineEnd = linePtr + (uint)lineLen;
+        if (curPtr >= linePtr && curPtr < lineEnd)
+            bracketHL1 = (int)(curPtr - linePtr);
+        if (matchPos >= linePtr && matchPos < lineEnd)
+            bracketHL2 = (int)(matchPos - linePtr);
+    }
 
     // Build screen buffer
     int pos = 0; // screen column position
@@ -173,7 +210,9 @@ void TSyntaxEditor::drawSyntaxLine(TDrawBuffer &b, uint linePtr,
     for (int i = 0; i < lineLen; i++) {
         char ch = lineBuf[i];
         bool selected = ((uint)i >= selS && (uint)i < selE);
+        bool isBracketHL = (i == bracketHL1 || i == bracketHL2);
         TColorAttr color = selected ? selColor
+                           : isBracketHL ? bracketHighlight
                            : (doSyntax ? colorMap[i] : normalColor);
 
         if (ch == '\t') {
@@ -240,13 +279,16 @@ void TSyntaxEditor::draw()
         drawLine = delta.y;
     }
 
+    // M11: Find matching bracket position for highlight
+    uint matchPos = settings.bracketMatch ? findMatchingBracket() : bufLen;
+
     TDrawBuffer b;
     TAttrPair color = getColor(0x0201);
     uint linePtr = drawPtr;
     int lineNum = delta.y;
 
     for (int y = 0; y < size.y; y++) {
-        drawSyntaxLine(b, linePtr, delta.x, size.x, color, lineNum);
+        drawSyntaxLine(b, linePtr, delta.x, size.x, color, lineNum, matchPos);
         writeBuf(0, y, size.x, 1, b);
         linePtr = nextLine(linePtr);
         lineNum++;
@@ -257,9 +299,17 @@ void TSyntaxEditor::draw()
 
 void TSyntaxEditor::handleEvent(TEvent &event)
 {
-    // Invalidate line state cache on any text-modifying key
-    if (event.what == evKeyDown)
-        lineStates.clear();
+    // M5: Only invalidate line state cache on text-modifying keys, not navigation
+    if (event.what == evKeyDown) {
+        ushort kc = event.keyDown.keyCode;
+        if (kc != kbUp && kc != kbDown && kc != kbLeft && kc != kbRight &&
+            kc != kbHome && kc != kbEnd && kc != kbPgUp && kc != kbPgDn &&
+            kc != kbShiftTab && kc != kbCtrlHome && kc != kbCtrlEnd &&
+            kc != kbCtrlLeft && kc != kbCtrlRight &&
+            !(event.keyDown.controlKeyState & (kbLeftCtrl | kbRightCtrl) &&
+              (kc == kbCtrlC || kc == kbCtrlA)))
+            lineStates.clear();
+    }
 
     // Modern key bindings: intercept before TEditor's WordStar convertEvent
     if (event.what == evKeyDown) {
@@ -280,8 +330,71 @@ void TSyntaxEditor::handleEvent(TEvent &event)
             if (cmd) {
                 event.what = evCommand;
                 event.message.command = cmd;
-                // Fall through to TFileEditor which handles these commands
                 TFileEditor::handleEvent(event);
+                return;
+            }
+        }
+
+        // M9: Ctrl+/ → toggle line comment
+        if (ctrl && !shift && event.keyDown.charScan.charCode == '/') {
+            toggleLineComment();
+            clearEvent(event);
+            return;
+        }
+
+        // L10: Ctrl+D → duplicate line
+        if (ctrl && !shift && keyCode == kbCtrlD) {
+            duplicateLine();
+            clearEvent(event);
+            return;
+        }
+
+        // L11: Ctrl+Shift+K → delete line
+        if (ctrl && shift && (event.keyDown.charScan.charCode == 'K' ||
+                              event.keyDown.charScan.charCode == 'k' ||
+                              event.keyDown.charScan.charCode == 11)) {
+            deleteLine();
+            clearEvent(event);
+            return;
+        }
+
+        // L6: Tab → insert spaces when useTabs is false
+        if (keyCode == kbTab && !ctrl && !shift && !EditorSettings::instance().useTabs) {
+            int tabSz = EditorSettings::instance().tabSize;
+            char spaces[16];
+            memset(spaces, ' ', tabSz);
+            insertText(spaces, tabSz, False);
+            clearEvent(event);
+            return;
+        }
+
+        // L12: Auto-closing brackets/quotes
+        if (!ctrl && EditorSettings::instance().autoCloseBrackets) {
+            char ch = event.keyDown.charScan.charCode;
+            // For closing brackets/quotes, check if already at cursor and skip
+            if (ch == ')' || ch == ']' || ch == '}' || ch == '"' || ch == '\'' || ch == '`') {
+                if (curPtr < bufLen && bufChar(curPtr) == ch) {
+                    setCurPtr(curPtr + 1, 0);
+                    trackCursor(True);
+                    clearEvent(event);
+                    return;
+                }
+            }
+            char closing = 0;
+            switch (ch) {
+            case '(': closing = ')'; break;
+            case '[': closing = ']'; break;
+            case '{': closing = '}'; break;
+            case '"': closing = '"'; break;
+            case '\'': closing = '\''; break;
+            case '`': closing = '`'; break;
+            }
+            if (closing) {
+                char pair[2] = {ch, closing};
+                insertText(pair, 2, False);
+                setCurPtr(curPtr - 1, 0);
+                trackCursor(True);
+                clearEvent(event);
                 return;
             }
         }
@@ -319,6 +432,128 @@ void TSyntaxEditor::handleEvent(TEvent &event)
     TFileEditor::handleEvent(event);
 }
 
+// M9: Toggle line comment for current line
+void TSyntaxEditor::toggleLineComment()
+{
+    const char *prefix = "// ";
+    if (lexer) {
+        const char *lang = lexer->languageName();
+        if (strcmp(lang, "HTML") == 0 || strcmp(lang, "XML") == 0) return;
+        if (strcmp(lang, "CSS") == 0) return;
+        if (strcmp(lang, "YAML") == 0) prefix = "# ";
+        if (strcmp(lang, "SQL") == 0) prefix = "-- ";
+    }
+    int prefixLen = strlen(prefix);
+
+    // Find start of current line
+    uint ls = curPtr;
+    while (ls > 0) {
+        char ch = bufChar(ls - 1);
+        if (ch == '\n') break;
+        ls--;
+    }
+
+    // Get line text
+    char lineBuf[4096];
+    int lineLen = getLineText(ls, lineBuf, sizeof(lineBuf) - 1);
+    lineBuf[lineLen] = '\0';
+
+    // Find first non-whitespace
+    int firstNonWS = 0;
+    while (firstNonWS < lineLen && (lineBuf[firstNonWS] == ' ' || lineBuf[firstNonWS] == '\t'))
+        firstNonWS++;
+
+    if (lineLen - firstNonWS >= prefixLen &&
+        strncmp(lineBuf + firstNonWS, prefix, prefixLen) == 0) {
+        // Remove comment prefix
+        deleteRange(ls + firstNonWS, ls + firstNonWS + prefixLen, True);
+    } else {
+        // Add comment prefix
+        setCurPtr(ls + firstNonWS, 0);
+        insertText(prefix, prefixLen, False);
+    }
+    lineStates.clear();
+    drawView();
+}
+
+// L10: Duplicate current line
+void TSyntaxEditor::duplicateLine()
+{
+    uint ls = curPtr;
+    while (ls > 0 && bufChar(ls - 1) != '\n')
+        ls--;
+    uint le = curPtr;
+    while (le < bufLen && bufChar(le) != '\n')
+        le++;
+
+    std::string lineText;
+    lineText += '\n';
+    for (uint i = ls; i < le; i++)
+        lineText += bufChar(i);
+
+    setCurPtr(le, 0);
+    insertText(lineText.c_str(), lineText.size(), False);
+
+    lineStates.clear();
+    drawView();
+}
+
+// L11: Delete current line
+void TSyntaxEditor::deleteLine()
+{
+    uint ls = curPtr;
+    while (ls > 0 && bufChar(ls - 1) != '\n')
+        ls--;
+    uint le = curPtr;
+    while (le < bufLen && bufChar(le) != '\n')
+        le++;
+    if (le < bufLen) le++; // include the newline
+
+    setCurPtr(ls, 0);
+    setSelect(ls, le, True);
+    deleteSelect();
+
+    lineStates.clear();
+    drawView();
+}
+
+// M11: Find matching bracket position (returns bufLen if not found)
+uint TSyntaxEditor::findMatchingBracket()
+{
+    if (curPtr >= bufLen) return bufLen;
+    char ch = bufChar(curPtr);
+
+    char match = 0;
+    int dir = 0;
+    switch (ch) {
+    case '(': match = ')'; dir = 1; break;
+    case ')': match = '('; dir = -1; break;
+    case '[': match = ']'; dir = 1; break;
+    case ']': match = '['; dir = -1; break;
+    case '{': match = '}'; dir = 1; break;
+    case '}': match = '{'; dir = -1; break;
+    default: return bufLen;
+    }
+
+    int depth = 1;
+    uint pos = curPtr;
+    int iterations = 0;
+    while (iterations++ < 100000) {
+        if (dir > 0) {
+            pos = nextChar(pos);
+            if (pos >= bufLen) return bufLen;
+        } else {
+            if (pos == 0) return bufLen;
+            pos = prevChar(pos);
+        }
+        char c = bufChar(pos);
+        if (c == ch) depth++;
+        if (c == match) depth--;
+        if (depth == 0) return pos;
+    }
+    return bufLen;
+}
+
 // ── Bracket matching ───────────────────────────────────────────────────
 
 void TSyntaxEditor::matchBracket()
@@ -340,7 +575,9 @@ void TSyntaxEditor::matchBracket()
 
     int depth = 1;
     uint pos = curPtr;
-    while (true) {
+    int iterations = 0;
+    const int maxIterations = 100000;
+    while (iterations++ < maxIterations) {
         if (dir > 0) {
             pos = nextChar(pos);
             if (pos >= bufLen) return;
@@ -363,24 +600,31 @@ void TSyntaxEditor::matchBracket()
 
 TDialog *createOptionsDialog()
 {
-    auto *d = new TDialog(TRect(0, 0, 42, 18), "Editor Options");
+    // L2: Cap dialog size to terminal
+    int dW = 42, dH = 20;
+    if (TProgram::deskTop) {
+        dW = std::min(dW, (int)TProgram::deskTop->size.x - 2);
+        dH = std::min(dH, (int)TProgram::deskTop->size.y - 2);
+    }
+    auto *d = new TDialog(TRect(0, 0, dW, dH), "Editor Options");
     d->options |= ofCentered;
 
-    d->insert(new TCheckBoxes(TRect(3, 2, 39, 9),
+    d->insert(new TCheckBoxes(TRect(3, 2, dW - 3, 10),
         new TSItem("~L~ine numbers",
         new TSItem("~S~yntax highlighting",
         new TSItem("Show ~w~hitespace",
         new TSItem("Show ~E~OL markers",
         new TSItem("~A~uto indent",
         new TSItem("~B~racket matching",
-        new TSItem("Use ~t~abs (uncheck = spaces)", nullptr)))))))));
+        new TSItem("Use ~t~abs (uncheck = spaces)",
+        new TSItem("Auto-~c~lose brackets", nullptr))))))))));
 
-    auto *tabInput = new TInputLine(TRect(16, 10, 22, 11), 4);
+    auto *tabInput = new TInputLine(TRect(16, 11, 22, 12), 4);
     d->insert(tabInput);
-    d->insert(new TLabel(TRect(3, 10, 15, 11), "~T~ab size", tabInput));
+    d->insert(new TLabel(TRect(3, 11, 15, 12), "~T~ab size", tabInput));
 
-    d->insert(new TButton(TRect(8, 14, 20, 16), "O~K~", cmOK, bfDefault));
-    d->insert(new TButton(TRect(22, 14, 34, 16), "Cancel", cmCancel, bfNormal));
+    d->insert(new TButton(TRect(8, dH - 4, 20, dH - 2), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(22, dH - 4, 34, dH - 2), "Cancel", cmCancel, bfNormal));
 
     d->selectNext(False);
     return d;
@@ -469,7 +713,10 @@ public:
 
 TSyntaxColorsDialog::TSyntaxColorsDialog()
     : TWindowInit(&TDialog::initFrame),
-      TDialog(TRect(0, 0, 72, 27), "Syntax Colors")
+      TDialog(TRect(0, 0,
+                    std::min(72, TProgram::deskTop ? (int)TProgram::deskTop->size.x - 2 : 72),
+                    std::min(27, TProgram::deskTop ? (int)TProgram::deskTop->size.y - 2 : 27)),
+              "Syntax Colors")
 {
     options |= ofCentered;
     editColors = EditorSettings::instance().colors;
@@ -613,7 +860,7 @@ void TSyntaxColorsDialog::newTheme()
 
     char buf[65] = {};
     TView *p = TProgram::application->validView(d);
-    if (!p) return;
+    if (!p) { TObject::destroy(d); return; }
     ushort result = TProgram::deskTop->execView(p);
     if (result == cmOK)
         p->getData(buf);

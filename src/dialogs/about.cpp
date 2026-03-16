@@ -16,7 +16,9 @@ TDialog *createAboutDialog()
     d->insert(new TStaticText(TRect(3, 8, 41, 9),
         "\003Supports PHP, HTML, CSS,"));
     d->insert(new TStaticText(TRect(3, 9, 41, 10),
-        "\003JS, TS, Vue, JSON, YAML, SQL"));
+        "\003JS, TS, Vue, JSON, YAML,"));
+    d->insert(new TStaticText(TRect(3, 10, 41, 11),
+        "\003SQL, Markdown, XML"));
 
     d->insert(new TButton(TRect(16, 11, 28, 13), "O~K~", cmOK, bfDefault));
 

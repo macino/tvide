@@ -293,8 +293,10 @@ SyntaxColors SyntaxColors::deserialize(const std::string &s)
     int i = 0;
     while (iss >> tok && i < kNumColorEntries) {
         unsigned int val = 0;
-        sscanf(tok.c_str(), "%X", &val);
-        colorEntryRef(c, i) = TColorAttr((uint8_t)val);
+        if (sscanf(tok.c_str(), "%X", &val) == 1 && val <= 0xFF) {
+            colorEntryRef(c, i) = TColorAttr((uint8_t)val);
+        }
+        // M8: Skip invalid entries, keeping default colors
         i++;
     }
     return c;

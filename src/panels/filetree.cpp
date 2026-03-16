@@ -6,6 +6,8 @@
 #include <cstring>
 #include <algorithm>
 
+static const int MAX_TREE_DEPTH = 64;
+
 // ── TFileTreeListBox (colors directories in blue) ───────────────────────
 
 TFileTreeListBox::TFileTreeListBox(const TRect &bounds, ushort aNumCols,
@@ -141,7 +143,16 @@ void TFileTreePanel::loadChildren(FileNode &node)
     node.children.clear();
 
     DIR *dir = opendir(node.fullPath.c_str());
-    if (!dir) return;
+    if (!dir) {
+        // L1: show error indicator for failed directories
+        FileNode errNode;
+        errNode.name = "⛔ Permission denied";
+        errNode.fullPath = node.fullPath;
+        errNode.isDir = false;
+        errNode.depth = node.depth + 1;
+        node.children.push_back(std::move(errNode));
+        return;
+    }
 
     std::vector<FileNode> dirs, files;
     struct dirent *ent;
@@ -180,7 +191,7 @@ void TFileTreePanel::flattenNode(FileNode &node)
 {
     for (auto &child : node.children) {
         flatList.push_back(&child);
-        if (child.isDir && child.expanded) {
+        if (child.isDir && child.expanded && child.depth < MAX_TREE_DEPTH) {
             loadChildren(child);
             flattenNode(child);
         }
@@ -346,6 +357,7 @@ void TFileTreePanel::handleEvent(TEvent &event)
 
     // Handle mouse wheel scrolling
     if (event.what == evMouseWheel) {
+        if (listBox->range <= 0) { clearEvent(event); return; }
         int delta = (event.mouse.wheel == mwUp) ? -3 : 3;
         int newFocus = std::max(0, std::min((int)listBox->range - 1,
                                              listBox->focused + delta));
@@ -357,6 +369,15 @@ void TFileTreePanel::handleEvent(TEvent &event)
 
     // Handle keyboard navigation before TWindow dispatches to subviews
     if (event.what == evKeyDown) {
+        // C1: guard all navigation against empty list
+        if (listBox->range <= 0 && event.keyDown.keyCode != kbEnter) {
+            switch (event.keyDown.keyCode) {
+            case kbUp: case kbDown: case kbPgUp: case kbPgDn:
+            case kbHome: case kbEnd: case kbLeft: case kbRight:
+                clearEvent(event);
+                return;
+            }
+        }
         switch (event.keyDown.keyCode) {
         case kbEnter:
             toggleOrOpen();

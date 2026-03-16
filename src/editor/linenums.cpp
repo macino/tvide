@@ -11,7 +11,13 @@ TLineGutter::TLineGutter(const TRect &bounds, TSyntaxEditor *anEditor)
 
 int TLineGutter::gutterWidth() const
 {
-    return size.x;
+    // L5: Dynamic width based on line count
+    if (!editor) return 5;
+    int total = editor->getTotalLines();
+    int digits = 1;
+    int n = total;
+    while (n >= 10) { digits++; n /= 10; }
+    return digits + 2; // digits + 1 space + 1 separator
 }
 
 void TLineGutter::draw()

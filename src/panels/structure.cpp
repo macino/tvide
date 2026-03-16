@@ -4,6 +4,33 @@
 #include <algorithm>
 #include <functional>
 
+// H5: Helper to check if a keyword position is inside a string or after a line comment
+static bool isInsideStringOrComment(const std::string &ln, size_t pos, const std::string &lineComment = "//")
+{
+    // Check for line comment before position
+    if (!lineComment.empty()) {
+        size_t commentPos = ln.find(lineComment);
+        if (commentPos != std::string::npos && commentPos < pos)
+            return true;
+    }
+    // Also check # comments for certain contexts
+    {
+        size_t hashPos = ln.find('#');
+        if (hashPos != std::string::npos && hashPos < pos)
+            return true;
+    }
+    // Count quote characters before position to detect if inside string
+    int singleQuotes = 0, doubleQuotes = 0;
+    for (size_t i = 0; i < pos && i < ln.size(); i++) {
+        if (ln[i] == '\'' && (i == 0 || ln[i-1] != '\\')) singleQuotes++;
+        if (ln[i] == '"' && (i == 0 || ln[i-1] != '\\')) doubleQuotes++;
+    }
+    // If odd number of quotes before position, we're inside a string
+    if (singleQuotes % 2 != 0 || doubleQuotes % 2 != 0)
+        return true;
+    return false;
+}
+
 // ── TStructureListBox (blue focused item) ───────────────────────────────
 
 TStructureListBox::TStructureListBox(const TRect &bounds, ushort aNumCols,
@@ -126,15 +153,15 @@ static void forEachLine(const std::string &text,
 static void parsePhp(const std::string &text, std::vector<SymbolInfo> &syms)
 {
     forEachLine(text, [&](int line, const std::string &ln) {
-        // Trim leading whitespace for indent detection
         size_t indent = ln.find_first_not_of(" \t");
         if (indent == std::string::npos) return;
 
         // namespace
         if (ln.find("namespace ", indent) == indent) {
+            if (isInsideStringOrComment(ln, indent)) return;
             size_t s = indent + 10;
             size_t e = ln.find_first_of(";{", s);
-            if (e != std::string::npos)
+            if (e != std::string::npos && s < ln.size() && e > s)
                 syms.push_back({SymbolKind::Namespace, ln.substr(s, e - s), line, 0});
         }
         // class / interface / trait / enum
@@ -143,46 +170,55 @@ static void parsePhp(const std::string &text, std::vector<SymbolInfo> &syms)
                  ln.find("final class ", indent) != std::string::npos) {
             auto p = ln.find("class ");
             if (p != std::string::npos) {
+                if (isInsideStringOrComment(ln, p)) return;
                 size_t s = p + 6;
                 size_t e = s;
                 while (e < ln.size() && ln[e] != ' ' && ln[e] != '{' && ln[e] != ':')
                     e++;
-                syms.push_back({SymbolKind::Class, ln.substr(s, e - s), line, 0});
+                if (e > s && s < ln.size())
+                    syms.push_back({SymbolKind::Class, ln.substr(s, e - s), line, 0});
             }
         }
         else if (ln.find("interface ", indent) != std::string::npos) {
             auto p = ln.find("interface ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 10;
             size_t e = s;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '{')
                 e++;
-            syms.push_back({SymbolKind::Interface, ln.substr(s, e - s), line, 0});
+            if (e > s && s < ln.size())
+                syms.push_back({SymbolKind::Interface, ln.substr(s, e - s), line, 0});
         }
         else if (ln.find("trait ", indent) != std::string::npos) {
             auto p = ln.find("trait ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 6;
             size_t e = s;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '{')
                 e++;
-            syms.push_back({SymbolKind::Trait, ln.substr(s, e - s), line, 0});
+            if (e > s && s < ln.size())
+                syms.push_back({SymbolKind::Trait, ln.substr(s, e - s), line, 0});
         }
         else if (ln.find("enum ", indent) != std::string::npos) {
             auto p = ln.find("enum ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 5;
             size_t e = s;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '{' && ln[e] != ':')
                 e++;
-            syms.push_back({SymbolKind::Enum, ln.substr(s, e - s), line, 0});
+            if (e > s && s < ln.size())
+                syms.push_back({SymbolKind::Enum, ln.substr(s, e - s), line, 0});
         }
         // function / method
         else if (ln.find("function ") != std::string::npos) {
             auto p = ln.find("function ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 9;
             if (s < ln.size() && ln[s] == '&') s++; // reference return
             size_t e = s;
             while (e < ln.size() && ln[e] != '(' && ln[e] != ' ')
                 e++;
-            if (e > s) {
+            if (e > s && s < ln.size()) {
                 SymbolKind kind = (indent > 0) ? SymbolKind::Method : SymbolKind::Function;
                 int depth = (indent > 0) ? 1 : 0;
                 syms.push_back({kind, ln.substr(s, e - s), line, depth});
@@ -191,11 +227,12 @@ static void parsePhp(const std::string &text, std::vector<SymbolInfo> &syms)
         // const
         else if (ln.find("const ", indent) != std::string::npos && indent > 0) {
             auto p = ln.find("const ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 6;
             size_t e = s;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '=' && ln[e] != ';')
                 e++;
-            if (e > s)
+            if (e > s && s < ln.size())
                 syms.push_back({SymbolKind::Constant, ln.substr(s, e - s), line, 1});
         }
     });
@@ -215,11 +252,12 @@ static void parseJsTs(const std::string &text, std::vector<SymbolInfo> &syms)
             ln.find("abstract class ", indent) == indent) {
             auto p = ln.find("class ");
             if (p != std::string::npos) {
+                if (isInsideStringOrComment(ln, p)) return;
                 size_t s = p + 6;
                 size_t e = s;
                 while (e < ln.size() && ln[e] != ' ' && ln[e] != '{' && ln[e] != '<')
                     e++;
-                if (e > s)
+                if (e > s && s < ln.size())
                     syms.push_back({SymbolKind::Class, ln.substr(s, e - s), line, 0});
             }
         }
@@ -227,11 +265,12 @@ static void parseJsTs(const std::string &text, std::vector<SymbolInfo> &syms)
         else if (ln.find("interface ", indent) == indent ||
                  ln.find("export interface ", indent) == indent) {
             auto p = ln.find("interface ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 10;
             size_t e = s;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '{' && ln[e] != '<')
                 e++;
-            if (e > s)
+            if (e > s && s < ln.size())
                 syms.push_back({SymbolKind::Interface, ln.substr(s, e - s), line, 0});
         }
         // enum (TS)
@@ -239,11 +278,12 @@ static void parseJsTs(const std::string &text, std::vector<SymbolInfo> &syms)
                  ln.find("export enum ", indent) == indent ||
                  ln.find("const enum ", indent) == indent) {
             auto p = ln.find("enum ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 5;
             size_t e = s;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '{')
                 e++;
-            if (e > s)
+            if (e > s && s < ln.size())
                 syms.push_back({SymbolKind::Enum, ln.substr(s, e - s), line, 0});
         }
         // function
@@ -253,30 +293,37 @@ static void parseJsTs(const std::string &text, std::vector<SymbolInfo> &syms)
                  ln.find("async function ", indent) == indent ||
                  ln.find("export async function ", indent) == indent) {
             auto p = ln.find("function ");
+            if (isInsideStringOrComment(ln, p)) return;
             size_t s = p + 9;
             if (s < ln.size() && ln[s] == '*') s++; // generator
             size_t e = s;
             while (e < ln.size() && ln[e] != '(' && ln[e] != '<' && ln[e] != ' ')
                 e++;
-            if (e > s)
+            if (e > s && s < ln.size())
                 syms.push_back({SymbolKind::Function, ln.substr(s, e - s), line, 0});
         }
-        // const/let/var arrow or assigned function
+        // H1 FIX: const/let/var arrow or assigned function — use keyword position directly
         else if ((ln.find("const ", indent) == indent ||
                   ln.find("let ", indent) == indent ||
                   ln.find("var ", indent) == indent ||
                   ln.find("export const ", indent) == indent) &&
                  (ln.find("=>") != std::string::npos ||
                   ln.find("function") != std::string::npos)) {
-            // Extract name after const/let/var
-            auto p = ln.find_first_of("cletvar", indent);
-            p = ln.find(' ', p);
-            if (p == std::string::npos) return;
-            p++;
+            if (isInsideStringOrComment(ln, indent)) return;
+            // Find the end of the keyword (const/let/var/export const)
+            size_t kwEnd;
+            if (ln.find("export const ", indent) == indent)
+                kwEnd = indent + 13; // "export const "
+            else {
+                kwEnd = ln.find(' ', indent);
+                if (kwEnd == std::string::npos) return;
+                kwEnd++; // skip the space
+            }
+            size_t p = kwEnd;
             size_t e = p;
             while (e < ln.size() && ln[e] != ' ' && ln[e] != '=' && ln[e] != ':' && ln[e] != '(')
                 e++;
-            if (e > p)
+            if (e > p && p < ln.size())
                 syms.push_back({SymbolKind::Function, ln.substr(p, e - p), line, 0});
         }
     });
@@ -568,6 +615,28 @@ void TStructurePanel::navigateToSymbol()
     if (idx < 0 || idx >= (int)symbols.size() || !trackedEditor)
         return;
 
+    // C2: Validate trackedEditor is still alive by checking against app's lastEditorWindow
+    TVIDEApp *app = dynamic_cast<TVIDEApp *>(TProgram::application);
+    if (!app) return;
+    // Walk desktop children to verify the editor's owner window still exists
+    bool editorAlive = false;
+    TView *dv = TProgram::deskTop->first();
+    if (dv) {
+        TView *t = dv;
+        do {
+            auto *ew = dynamic_cast<TSyntaxEditWindow *>(t);
+            if (ew && ew->getEditor() == trackedEditor) {
+                editorAlive = true;
+                break;
+            }
+            t = t->next;
+        } while (t != dv);
+    }
+    if (!editorAlive) {
+        trackedEditor = nullptr;
+        return;
+    }
+
     int targetLine = symbols[idx].line;
 
     // Navigate editor to line
@@ -615,6 +684,7 @@ void TStructurePanel::handleEvent(TEvent &event)
 
     // Handle mouse wheel scrolling
     if (event.what == evMouseWheel) {
+        if (listBox->range <= 0) { clearEvent(event); return; }
         int delta = (event.mouse.wheel == mwUp) ? -3 : 3;
         int newFocus = std::max(0, std::min((int)listBox->range - 1,
                                              listBox->focused + delta));
@@ -626,6 +696,15 @@ void TStructurePanel::handleEvent(TEvent &event)
 
     // Handle keyboard navigation before TWindow dispatches to subviews
     if (event.what == evKeyDown) {
+        // C1: guard all navigation against empty list
+        if (listBox->range <= 0 && event.keyDown.keyCode != kbEnter) {
+            switch (event.keyDown.keyCode) {
+            case kbUp: case kbDown: case kbPgUp: case kbPgDn:
+            case kbHome: case kbEnd:
+                clearEvent(event);
+                return;
+            }
+        }
         switch (event.keyDown.keyCode) {
         case kbEnter:
             navigateToSymbol();
