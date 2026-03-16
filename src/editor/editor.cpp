@@ -27,6 +27,7 @@ TSyntaxEditor::TSyntaxEditor(const TRect &bounds,
                              TStringView aFileName)
     : TFileEditor(bounds, aHScrollBar, aVScrollBar, aIndicator, aFileName)
 {
+    eventMask |= evMouseWheel;
     std::string fn(aFileName.data(), aFileName.size());
     lexer.reset(SyntaxLexer::createForFile(fn));
     autoIndent = EditorSettings::instance().autoIndent;
@@ -299,6 +300,18 @@ void TSyntaxEditor::draw()
 
 void TSyntaxEditor::handleEvent(TEvent &event)
 {
+    // Mouse wheel scrolling — scroll 3 lines, only when cursor is over us
+    if (event.what == evMouseWheel) {
+        TPoint mouse = makeLocal(event.mouse.where);
+        if (mouse.x >= 0 && mouse.x < size.x && mouse.y >= 0 && mouse.y < size.y) {
+            int lines = (event.mouse.wheel == mwUp) ? -3 : 3;
+            scrollTo(delta.x, delta.y + lines);
+            clearEvent(event);
+            return;
+        }
+        return; // not over us — don't consume
+    }
+
     // M5: Only invalidate line state cache on text-modifying keys, not navigation
     if (event.what == evKeyDown) {
         ushort kc = event.keyDown.keyCode;

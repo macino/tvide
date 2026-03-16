@@ -355,8 +355,11 @@ void TFileTreePanel::handleEvent(TEvent &event)
         }
     }
 
-    // Handle mouse wheel scrolling
+    // Handle mouse wheel scrolling — only when cursor is over this panel
     if (event.what == evMouseWheel) {
+        TPoint mouse = makeLocal(event.mouse.where);
+        if (mouse.x < 0 || mouse.x >= size.x || mouse.y < 0 || mouse.y >= size.y)
+            return; // not over us — let someone else handle it
         if (listBox->range <= 0) { clearEvent(event); return; }
         int delta = (event.mouse.wheel == mwUp) ? -3 : 3;
         int newFocus = std::max(0, std::min((int)listBox->range - 1,
