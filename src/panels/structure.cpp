@@ -619,7 +619,6 @@ TStructurePanel::TStructurePanel(const TRect &bounds)
 
 TStructurePanel::~TStructurePanel()
 {
-    listBox->newList(nullptr);
     items = nullptr;
 }
 

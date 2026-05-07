@@ -37,7 +37,6 @@ TWindowListPanel::TWindowListPanel(const TRect &bounds)
 
 TWindowListPanel::~TWindowListPanel()
 {
-    listBox->newList(nullptr);
     items = nullptr;
 }
 

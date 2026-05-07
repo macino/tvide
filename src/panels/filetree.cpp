@@ -374,7 +374,8 @@ TFileTreePanel::TFileTreePanel(const TRect &bounds)
 
 TFileTreePanel::~TFileTreePanel()
 {
-    listBox->newList(nullptr);
+    // TListBox owns its collection — don't touch it here, it may already
+    // have been destroyed by TGroup::shutDown.
     fileList = nullptr;
 }
 
@@ -600,7 +601,6 @@ TMessagePanel::TMessagePanel(const TRect &bounds)
 
 TMessagePanel::~TMessagePanel()
 {
-    listBox->newList(nullptr);
     messages = nullptr;
 }
 
