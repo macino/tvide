@@ -7,6 +7,10 @@ fork of Borland's classic Turbo Vision — and inspired by RHIDE.
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 
+## Demo
+
+![tvide demo](docs/screenshots/demo.gif)
+
 ## Screenshots
 
 Default workspace — file tree, window list, structure panel pre-opened:
