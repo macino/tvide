@@ -326,6 +326,69 @@ void TSyntaxEditor::draw()
 
 void TSyntaxEditor::handleEvent(TEvent &event)
 {
+    // ── Track keystrokes for auto-suggest ──────────────────────────────
+    if (event.what == evKeyDown) {
+        ushort cks = event.keyDown.controlKeyState;
+        bool isCtrl = (cks & (kbLeftCtrl | kbRightCtrl)) != 0;
+        char ch = event.keyDown.charScan.charCode;
+        if (!isCtrl &&
+            ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+             (ch >= '0' && ch <= '9') || ch == '_')) {
+            noteKeystroke();
+            indexedFromText = false; // text will change; re-scan on next tick
+        }
+    }
+
+    // ── Auto-suggest popup interception ────────────────────────────────
+    if (suggestPopup && event.what == evKeyDown) {
+        ushort kc = event.keyDown.keyCode;
+        ushort cks = event.keyDown.controlKeyState;
+        bool isCtrl = (cks & (kbLeftCtrl | kbRightCtrl)) != 0;
+
+        // Letters/digits/underscore: extend prefix → refilter, don't intercept,
+        // let editor insert the char then we'll re-trigger on idle.
+        char ch = event.keyDown.charScan.charCode;
+        bool isWordChar = !isCtrl &&
+            ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+             (ch >= '0' && ch <= '9') || ch == '_');
+
+        if (!isWordChar) {
+            suggestPopup->handleEvent(event);
+            if (suggestPopup->lastResult == TSuggestionPopup::ResAccepted) {
+                std::string text = suggestPopup->acceptedText;
+                closeSuggestPopup();
+                acceptSuggestion(text);
+                clearEvent(event);
+                return;
+            }
+            if (suggestPopup->lastResult == TSuggestionPopup::ResCancelled) {
+                closeSuggestPopup();
+                clearEvent(event);
+                return;
+            }
+            // Popup didn't consume; if event was Up/Down etc it would have.
+            // Other keys (arrow horizontals, Home, etc.) — close popup, let
+            // editor handle.
+            if (kc == kbLeft || kc == kbRight || kc == kbHome || kc == kbEnd ||
+                kc == kbDel || kc == kbBack || kc == kbCtrlLeft || kc == kbCtrlRight) {
+                closeSuggestPopup();
+                // fall through
+            }
+        }
+    }
+
+    // Ctrl-Space → manual completion
+    if (event.what == evKeyDown) {
+        ushort cks = event.keyDown.controlKeyState;
+        bool ctrlHeld = (cks & (kbLeftCtrl | kbRightCtrl)) != 0;
+        if (ctrlHeld && event.keyDown.charScan.charCode == 0 &&
+            event.keyDown.keyCode == 0x0300) {
+            manualSuggest();
+            clearEvent(event);
+            return;
+        }
+    }
+
     // Mouse wheel scrolling — scroll 3 lines, only when cursor is over us
     if (event.what == evMouseWheel) {
         TPoint mouse = makeLocal(event.mouse.where);
@@ -469,6 +532,132 @@ void TSyntaxEditor::handleEvent(TEvent &event)
     }
 
     TFileEditor::handleEvent(event);
+
+    // Note keystroke time after a typed word-char (used by auto-suggest)
+    if (event.what == evNothing) return;
+    // event.what may have been cleared by parent; check the original
+}
+
+// ── Auto-suggest methods ────────────────────────────────────────────────
+
+#include <chrono>
+
+static long long nowMs()
+{
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+void TSyntaxEditor::noteKeystroke()
+{
+    lastKeystrokeMs = nowMs();
+}
+
+std::string TSyntaxEditor::currentWordPrefix(int maxLen) const
+{
+    std::string out;
+    if (curPtr == 0) return out;
+    uint p = curPtr;
+    while (p > 0 && (int)out.size() < maxLen) {
+        char ch = (p - 1 < (uint)curPtr) ? buffer[p - 1] : buffer[p - 1 + gapLen];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '$') {
+            out.insert(out.begin(), ch);
+            p--;
+        } else {
+            break;
+        }
+    }
+    // First char must be letter or underscore (not digit)
+    if (!out.empty() && out[0] >= '0' && out[0] <= '9')
+        out.clear();
+    return out;
+}
+
+void TSyntaxEditor::closeSuggestPopup()
+{
+    if (!suggestPopup) return;
+    if (owner) {
+        owner->remove(suggestPopup);
+        delete suggestPopup;
+    }
+    suggestPopup = nullptr;
+    suggestPrefixLen = 0;
+}
+
+void TSyntaxEditor::acceptSuggestion(const std::string &text)
+{
+    if (text.empty() || (int)text.size() <= suggestPrefixLen) return;
+    std::string suffix = text.substr(suggestPrefixLen);
+    insertText(suffix.data(), (int)suffix.size(), False);
+    trackCursor(True);
+}
+
+void TSyntaxEditor::tickAutoSuggest()
+{
+    auto &s = EditorSettings::instance();
+    if (!s.autoSuggest) {
+        if (suggestPopup) closeSuggestPopup();
+        return;
+    }
+    if (lastKeystrokeMs == 0) return;
+    if (nowMs() - lastKeystrokeMs < s.autoSuggestDelayMs) return;
+
+    std::string prefix = currentWordPrefix();
+    if ((int)prefix.size() < s.autoSuggestMinChars) {
+        if (suggestPopup) closeSuggestPopup();
+        return;
+    }
+
+    // Refresh local-text contributions if it's been a while
+    if (!indexedFromText && bufLen > 0) {
+        std::string text;
+        text.reserve(bufLen);
+        for (uint p = 0; p < bufLen; p++) {
+            char c = (p < (uint)curPtr) ? buffer[p] : buffer[p + gapLen];
+            text.push_back(c);
+        }
+        SuggestionIndex::instance().scanText(text);
+        indexedFromText = true;
+    }
+
+    auto items = SuggestionIndex::instance().suggestions(prefix, 12);
+    if (items.empty()) {
+        if (suggestPopup) closeSuggestPopup();
+        return;
+    }
+
+    // Position popup just below the cursor, in owner-window coordinates
+    if (!owner) return;
+    TPoint cursorGlobal = makeGlobal(cursor);
+    TPoint cursorLocal  = owner->makeLocal(cursorGlobal);
+    int ownerW = owner->size.x;
+    int ownerH = owner->size.y;
+    int w = 30;
+    for (auto &it : items)
+        if ((int)it.size() + 2 > w) w = std::min((int)it.size() + 2, 50);
+    int h = std::min((int)items.size(), 8);
+    int col = cursorLocal.x;
+    int row = cursorLocal.y + 1;
+    if (col + w > ownerW) col = std::max(0, ownerW - w);
+    if (row + h > ownerH) row = std::max(0, cursorLocal.y - h);
+
+    TRect r(col, row, col + w, row + h);
+    if (!suggestPopup) {
+        suggestPopup = new TSuggestionPopup(r);
+        if (owner) owner->insert(suggestPopup);
+    } else {
+        suggestPopup->locate(r);
+    }
+    suggestPopup->setItems(items);
+    suggestPrefixLen = (int)prefix.size();
+}
+
+void TSyntaxEditor::manualSuggest()
+{
+    lastKeystrokeMs = nowMs() - EditorSettings::instance().autoSuggestDelayMs - 1;
+    indexedFromText = false;
+    tickAutoSuggest();
 }
 
 // M9: Toggle line comment for current line
@@ -665,6 +854,15 @@ TDialog *createOptionsDialog()
     auto *tabInput = new TInputLine(TRect(leftX + 13, 11, leftX + 19, 12), 4);
     d->insert(tabInput);
     d->insert(new TLabel(TRect(leftX, 11, leftX + 12, 12), "~T~ab size", tabInput));
+
+    d->insert(new TStaticText(TRect(leftX, 13, leftX + colW, 14),
+                              "─ Auto-suggest ─"));
+    d->insert(new TCheckBoxes(TRect(leftX, 14, leftX + colW, 15),
+        new TSItem("Enable auto-su~g~gest popup", nullptr)));
+    auto *delayInput = new TInputLine(TRect(leftX + 13, 15, leftX + 21, 16), 6);
+    d->insert(delayInput);
+    d->insert(new TLabel(TRect(leftX, 15, leftX + 12, 16),
+                         "Delay (~m~s)", delayInput));
 
     d->insert(new TStaticText(TRect(midX, 1, dW - 2, 2), "─ File tree sort ─"));
     d->insert(new TRadioButtons(TRect(midX, 2, dW - 2, 6),

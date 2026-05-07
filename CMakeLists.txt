@@ -21,6 +21,7 @@ add_executable(tvide
     src/editor/editor.cpp
     src/editor/editwindow.cpp
     src/editor/linenums.cpp
+    src/editor/suggest.cpp
     src/syntax/lexer.cpp
     src/syntax/php.cpp
     src/syntax/html.cpp

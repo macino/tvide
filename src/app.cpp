@@ -4,6 +4,7 @@
 #include "dialogs/dialogs.h"
 #include "project/project.h"
 #include "syntax/lexer.h"
+// SuggestionIndex lives in editor.h
 
 #include <cstring>
 #include <cstdlib>
@@ -992,6 +993,8 @@ void TVIDEApp::toolOptions()
     struct {
         ushort editorCB;
         char   tabSize[5];
+        ushort autoSuggestCB;
+        char   suggestDelay[7];
         ushort ftSort;
         ushort dirsFirstCB;
         ushort structSort;
@@ -1009,6 +1012,11 @@ void TVIDEApp::toolOptions()
 
     snprintf(data.tabSize + 1, sizeof(data.tabSize) - 1, "%d", settings.tabSize);
     data.tabSize[0] = (char)strlen(data.tabSize + 1);
+
+    if (settings.autoSuggest) data.autoSuggestCB |= 0x01;
+    snprintf(data.suggestDelay + 1, sizeof(data.suggestDelay) - 1, "%d",
+             settings.autoSuggestDelayMs);
+    data.suggestDelay[0] = (char)strlen(data.suggestDelay + 1);
 
     if (fileTreePanel) {
         switch (fileTreePanel->getSortMode()) {
@@ -1048,6 +1056,10 @@ void TVIDEApp::toolOptions()
 
         int ts = atoi(data.tabSize + 1);
         if (ts >= 1 && ts <= 16) settings.tabSize = ts;
+
+        settings.autoSuggest = (data.autoSuggestCB & 0x01) != 0;
+        int delay = atoi(data.suggestDelay + 1);
+        if (delay >= 0 && delay <= 5000) settings.autoSuggestDelayMs = delay;
 
         if (fileTreePanel) {
             FileSortMode fm = FileSortMode::NameAsc;
@@ -1122,6 +1134,8 @@ void TVIDEApp::projectOpen(const std::string &path)
         if (messagePanel)
             messagePanel->addMessage(msg);
         dir = proj.rootPath;
+        SuggestionIndex::instance().clear();
+        SuggestionIndex::instance().scanProject(proj.rootPath);
     }
 
     // Always open file tree for the directory
@@ -1215,6 +1229,9 @@ void TVIDEApp::idle()
 
     if (lastEditorWindow && lastEditorWindow->getGutter())
         lastEditorWindow->getGutter()->drawView();
+
+    if (lastEditorWindow && lastEditorWindow->getEditor())
+        lastEditorWindow->getEditor()->tickAutoSuggest();
 
     // M10: Check for external file changes on the active editor
     if (lastEditorWindow && lastEditorWindow->getEditor()) {
