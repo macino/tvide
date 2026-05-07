@@ -2,7 +2,7 @@
 
 TDialog *createFindInFilesDialog()
 {
-    auto *d = new TDialog(TRect(0, 0, 50, 14), "Find in Files");
+    auto *d = new TDialog(TRect(0, 0, 50, 15), "Find in Files");
     d->options |= ofCentered;
 
     auto *searchInput = new TInputLine(TRect(3, 3, 44, 4), 256);
@@ -15,12 +15,13 @@ TDialog *createFindInFilesDialog()
     d->insert(new TLabel(TRect(2, 5, 18, 6), "~P~ath / mask", pathInput));
     d->insert(new THistory(TRect(44, 6, 47, 7), pathInput, 21));
 
-    d->insert(new TCheckBoxes(TRect(3, 8, 30, 10),
+    d->insert(new TCheckBoxes(TRect(3, 8, 32, 11),
         new TSItem("~C~ase sensitive",
-        new TSItem("~R~ecursive", nullptr))));
+        new TSItem("~R~ecursive",
+        new TSItem("Reg~e~xp (ERE)", nullptr)))));
 
-    d->insert(new TButton(TRect(20, 11, 30, 13), "O~K~", cmOK, bfDefault));
-    d->insert(new TButton(TRect(32, 11, 42, 13), "Cancel", cmCancel, bfNormal));
+    d->insert(new TButton(TRect(20, 12, 30, 14), "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(32, 12, 42, 14), "Cancel", cmCancel, bfNormal));
     d->selectNext(False);
     return d;
 }

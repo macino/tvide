@@ -157,7 +157,10 @@ void TFileTreePanel::loadChildren(FileNode &node)
     std::vector<FileNode> dirs, files;
     struct dirent *ent;
     while ((ent = readdir(dir)) != nullptr) {
-        if (ent->d_name[0] == '.') continue; // skip hidden and . / ..
+        if (ent->d_name[0] == '.' &&
+            (ent->d_name[1] == '\0' ||
+             (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
+            continue; // skip . and ..
         std::string name = ent->d_name;
         std::string full = node.fullPath + "/" + name;
         struct stat st;
@@ -172,19 +175,99 @@ void TFileTreePanel::loadChildren(FileNode &node)
         child.expanded = false;
         child.childrenLoaded = false;
         child.depth = node.depth + 1;
+        child.mtime = (long)st.st_mtime;
 
         if (isDir) dirs.push_back(std::move(child));
         else       files.push_back(std::move(child));
     }
     closedir(dir);
 
-    std::sort(dirs.begin(), dirs.end(),
-        [](const FileNode &a, const FileNode &b) { return a.name < b.name; });
-    std::sort(files.begin(), files.end(),
-        [](const FileNode &a, const FileNode &b) { return a.name < b.name; });
+    auto cmp = [this](const FileNode &a, const FileNode &b) {
+        switch (sortMode) {
+        case FileSortMode::NameAsc:  return a.name < b.name;
+        case FileSortMode::NameDesc: return a.name > b.name;
+        case FileSortMode::DateAsc:
+            return a.mtime != b.mtime ? a.mtime < b.mtime : a.name < b.name;
+        case FileSortMode::DateDesc:
+            return a.mtime != b.mtime ? a.mtime > b.mtime : a.name < b.name;
+        }
+        return a.name < b.name;
+    };
+    if (dirsFirst) {
+        std::sort(dirs.begin(), dirs.end(), cmp);
+        std::sort(files.begin(), files.end(), cmp);
+        for (auto &d : dirs) node.children.push_back(std::move(d));
+        for (auto &f : files) node.children.push_back(std::move(f));
+    } else {
+        std::vector<FileNode> mixed;
+        mixed.reserve(dirs.size() + files.size());
+        for (auto &d : dirs) mixed.push_back(std::move(d));
+        for (auto &f : files) mixed.push_back(std::move(f));
+        std::sort(mixed.begin(), mixed.end(), cmp);
+        for (auto &m : mixed) node.children.push_back(std::move(m));
+    }
+}
 
-    for (auto &d : dirs) node.children.push_back(std::move(d));
-    for (auto &f : files) node.children.push_back(std::move(f));
+void TFileTreePanel::resortAll(FileNode &node)
+{
+    auto cmp = [this](const FileNode &a, const FileNode &b) {
+        switch (sortMode) {
+        case FileSortMode::NameAsc:  return a.name < b.name;
+        case FileSortMode::NameDesc: return a.name > b.name;
+        case FileSortMode::DateAsc:
+            return a.mtime != b.mtime ? a.mtime < b.mtime : a.name < b.name;
+        case FileSortMode::DateDesc:
+            return a.mtime != b.mtime ? a.mtime > b.mtime : a.name < b.name;
+        }
+        return a.name < b.name;
+    };
+    if (dirsFirst) {
+        std::vector<FileNode> dirs, files;
+        for (auto &c : node.children) {
+            if (c.isDir) dirs.push_back(std::move(c));
+            else         files.push_back(std::move(c));
+        }
+        std::sort(dirs.begin(), dirs.end(), cmp);
+        std::sort(files.begin(), files.end(), cmp);
+        node.children.clear();
+        for (auto &d : dirs) node.children.push_back(std::move(d));
+        for (auto &f : files) node.children.push_back(std::move(f));
+    } else {
+        std::sort(node.children.begin(), node.children.end(), cmp);
+    }
+    for (auto &c : node.children)
+        if (c.isDir && c.childrenLoaded) resortAll(c);
+}
+
+void TFileTreePanel::setDirsFirst(bool on)
+{
+    if (dirsFirst == on) return;
+    dirsFirst = on;
+    resortAll(root);
+    rebuildFlatList();
+}
+
+void TFileTreePanel::toggleDirsFirst()
+{
+    setDirsFirst(!dirsFirst);
+}
+
+void TFileTreePanel::setSortMode(FileSortMode mode)
+{
+    if (sortMode == mode) return;
+    sortMode = mode;
+    resortAll(root);
+    rebuildFlatList();
+}
+
+void TFileTreePanel::cycleSortMode()
+{
+    switch (sortMode) {
+    case FileSortMode::NameAsc:  setSortMode(FileSortMode::NameDesc); break;
+    case FileSortMode::NameDesc: setSortMode(FileSortMode::DateDesc); break;
+    case FileSortMode::DateDesc: setSortMode(FileSortMode::DateAsc);  break;
+    case FileSortMode::DateAsc:  setSortMode(FileSortMode::NameAsc);  break;
+    }
 }
 
 void TFileTreePanel::flattenNode(FileNode &node)
@@ -386,6 +469,20 @@ void TFileTreePanel::handleEvent(TEvent &event)
             toggleOrOpen();
             clearEvent(event);
             return;
+        }
+        if (event.keyDown.charScan.charCode == 's' ||
+            event.keyDown.charScan.charCode == 'S') {
+            cycleSortMode();
+            clearEvent(event);
+            return;
+        }
+        if (event.keyDown.charScan.charCode == 'd' ||
+            event.keyDown.charScan.charCode == 'D') {
+            toggleDirsFirst();
+            clearEvent(event);
+            return;
+        }
+        switch (event.keyDown.keyCode) {
         case kbUp:
             if (listBox->focused > 0) {
                 listBox->focusItem(listBox->focused - 1);

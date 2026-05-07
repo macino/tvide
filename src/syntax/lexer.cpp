@@ -77,6 +77,45 @@ SyntaxLexer *SyntaxLexer::createForFile(const std::string &filename)
     if (ext == "twig" || ext == "blade" || ext == "latte")
         return new HtmlLexer();  // Template engines → HTML-ish
 
+    if (ext == "c" || ext == "cpp" || ext == "cxx" || ext == "cc" || ext == "c++" ||
+        ext == "h" || ext == "hpp" || ext == "hxx" || ext == "hh" || ext == "h++" ||
+        ext == "ipp" || ext == "tpp" || ext == "tcc" || ext == "inl")
+        return new CppLexerWithPP();
+    if (ext == "java")  return new JavaLexer();
+    if (ext == "cs")    return new CSharpLexer();
+    if (ext == "go")    return new GoLexer();
+    if (ext == "rs")    return new RustLexer();
+    if (ext == "kt" || ext == "kts") return new KotlinLexer();
+    if (ext == "swift") return new SwiftLexer();
+    if (ext == "lua")   return new LuaLexer();
+
+    if (ext == "py" || ext == "pyw" || ext == "pyi")
+        return new PythonLexer();
+
+    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "ksh" ||
+        ext == "fish" || ext == "ash")
+        return new ShellLexer();
+
+    if (ext == "rb" || ext == "rake" || ext == "gemspec")
+        return new RubyLexer();
+
+    if (basename == "Dockerfile" || basename == "dockerfile" ||
+        basename == "Containerfile" ||
+        ext == "dockerfile")
+        return new DockerfileLexer();
+
+    if (basename == "Makefile" || basename == "makefile" ||
+        basename == "GNUmakefile" ||
+        ext == "mk" || ext == "mak" || ext == "make")
+        return new MakefileLexer();
+
+    if (ext == "ini" || ext == "cfg" || ext == "conf" || ext == "config" ||
+        ext == "properties" || ext == "desktop")
+        return new IniLexer();
+    if (ext == "toml") return new TomlLexer();
+    if (ext == "env" || basename == ".env" || basename.find(".env.") == 0)
+        return new DotEnvLexer();
+
     return new PlainTextLexer();
 }
 

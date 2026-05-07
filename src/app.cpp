@@ -3,12 +3,17 @@
 #include "panels/panels.h"
 #include "dialogs/dialogs.h"
 #include "project/project.h"
+#include "syntax/lexer.h"
 
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
 #include <cstdarg>
 #include <sstream>
+#include <fstream>
+#include <regex>
+#include <memory>
+#include <dirent.h>
 #include <sys/stat.h>
 
 // ── Dialog helpers ──────────────────────────────────────────────────────
@@ -162,6 +167,7 @@ TMenuBar *TVIDEApp::initMenuBar(TRect r)
     TSubMenu &sub1 = *new TSubMenu("~F~ile", kbAltF) +
         *new TMenuItem("~O~pen...", cmOpenFile, kbF3, hcNoContext, "F3") +
         *new TMenuItem("~N~ew", cmFileNew, kbCtrlN, hcNoContext, "Ctrl-N") +
+        *new TMenuItem("New ~t~erminal", cmFileNewTerm, kbCtrlT, hcNoContext, "Ctrl-T") +
         *new TMenuItem("~S~ave", cmSave, kbF2, hcNoContext, "F2") +
         *new TMenuItem("S~a~ve as...", cmSaveAs, kbNoKey) +
         *new TMenuItem("~C~lose", cmFileClose, kbCtrlW, hcNoContext, "Ctrl-W") +
@@ -191,7 +197,8 @@ TMenuBar *TVIDEApp::initMenuBar(TRect r)
         *new TMenuItem("~S~earch again", cmSearchAgain, kbF4, hcNoContext, "F4") +
              newLine() +
         *new TMenuItem("~G~o to line...", cmGotoLine, kbCtrlG, hcNoContext, "Ctrl-G") +
-        *new TMenuItem("Find in ~f~iles...", cmFindInFiles, kbNoKey);
+        *new TMenuItem("Find in ~f~iles...", cmFindInFiles, kbShiftF7, hcNoContext, "Shift-F7") +
+        *new TMenuItem("Find sy~m~bol...", cmFindSymbol, kbCtrlF12, hcNoContext, "Ctrl-F12");
 
     TSubMenu &sub5 = *new TSubMenu("~W~indows", kbAltW) +
         *new TMenuItem("~S~ize/move", cmResize, kbCtrlF5, hcNoContext, "Ctrl-F5") +
@@ -207,6 +214,7 @@ TMenuBar *TVIDEApp::initMenuBar(TRect r)
     TSubMenu &sub6 = *new TSubMenu("~T~ools", kbAltT) +
         *new TMenuItem("~F~ile tree", cmToolFileTree, kbNoKey) +
         *new TMenuItem("~S~tructure", cmToolStructure, kbNoKey) +
+        *new TMenuItem("~W~indow list", cmToolWinList, kbNoKey) +
         *new TMenuItem("~T~erminal", cmToolTerminal, kbNoKey) +
         *new TMenuItem("~M~essages", cmToolMessages, kbNoKey) +
              newLine() +
@@ -246,13 +254,16 @@ TVIDEApp::TVIDEApp(int argc, char **argv) :
               &TVIDEApp::initMenuBar,
               &TVIDEApp::initDeskTop),
     windowCount(0),
+    terminalCount(0),
     fileTreePanel(nullptr),
     messagePanel(nullptr),
     structurePanel(nullptr),
+    winListPanel(nullptr),
     lastEditorWindow(nullptr),
     lastStructEditor(nullptr),
     fileTreeWidth(28),
-    structureWidth(30)
+    structureWidth(30),
+    winListWidth(28)
 {
     TCommandSet ts;
     ts.enableCmd(cmSave);
@@ -284,6 +295,12 @@ TVIDEApp::TVIDEApp(int argc, char **argv) :
             openEditor(argv[i], True);
         }
     }
+
+    // Default workspace: filetree + structure + winlist all open.
+    if (!fileTreePanel)  toolFileTree();
+    if (!structurePanel) toolStructure();
+    if (!winListPanel)   toolWinList();
+    relayout();
 }
 
 TVIDEApp::~TVIDEApp()
@@ -300,7 +317,24 @@ TSyntaxEditWindow *TVIDEApp::openEditor(const char *fileName, Boolean visible)
     if (!visible)
         w->hide();
     deskTop->insert(w);
+    message(this, evBroadcast, cmWinListChanged, nullptr);
     return w;
+}
+
+void TVIDEApp::fileNewTerminal()
+{
+    if (!deskTop) return;
+    TRect r = deskTop->getExtent();
+    r.grow(-2, -2);
+    TPoint termSize = TTerminalWindow::viewSize(r);
+    tvterm::TerminalController *ctrl = TTerminalWindow::createController(termSize);
+    if (!ctrl) {
+        messageBox("Failed to spawn terminal.", mfError | mfOKButton);
+        return;
+    }
+    auto *w = new TTerminalWindow(r, *ctrl, ++terminalCount);
+    deskTop->insert(w);
+    message(this, evBroadcast, cmWinListChanged, nullptr);
 }
 
 TSyntaxEditWindow *TVIDEApp::getActiveEditor()
@@ -335,6 +369,7 @@ void TVIDEApp::handleEvent(TEvent &event)
             break;
         }
         case cmFileNew:     fileNew();     break;
+        case cmFileNewTerm: fileNewTerminal(); break;
         case cmFileClose:   fileClose();   break;
         case cmChangeDrct:  changeDir();   break;
         case cmDosShell:    dosShell();    break;
@@ -343,12 +378,29 @@ void TVIDEApp::handleEvent(TEvent &event)
 
         case cmGotoLine:    gotoLine();    break;
         case cmFindInFiles: findInFiles(); break;
+        case cmFindSymbol:  findSymbol();  break;
 
         case cmWinCloseAll: winCloseAll(); break;
         case cmWinList:     winList();     break;
 
         case cmToolFileTree: toolFileTree(); break;
+        case cmSortNameAsc:
+            if (fileTreePanel) fileTreePanel->setSortMode(FileSortMode::NameAsc);
+            break;
+        case cmSortNameDesc:
+            if (fileTreePanel) fileTreePanel->setSortMode(FileSortMode::NameDesc);
+            break;
+        case cmSortDateAsc:
+            if (fileTreePanel) fileTreePanel->setSortMode(FileSortMode::DateAsc);
+            break;
+        case cmSortDateDesc:
+            if (fileTreePanel) fileTreePanel->setSortMode(FileSortMode::DateDesc);
+            break;
+        case cmSortDirsFirst:
+            if (fileTreePanel) fileTreePanel->toggleDirsFirst();
+            break;
         case cmToolStructure: toolStructure(); break;
+        case cmToolWinList:  toolWinList();  break;
         case cmToolTerminal: toolTerminal(); break;
         case cmToolMessages: toolMessages(); break;
         case cmToolOptions:  toolOptions();  break;
@@ -495,18 +547,22 @@ void TVIDEApp::findInFiles()
         std::string searchText(data.search + 1, (unsigned char)data.search[0]);
         std::string searchPath(data.path + 1, (unsigned char)data.path[0]);
         bool caseSensitive = (data.options & 0x01) != 0;
-        bool recursive = (data.options & 0x02) != 0;
+        bool recursive     = (data.options & 0x02) != 0;
+        bool useRegex      = (data.options & 0x04) != 0;
 
         if (searchText.empty()) return;
         if (searchPath.empty()) searchPath = ".";
 
+        if (!messagePanel) toolMessages();
         if (messagePanel) {
             messagePanel->clear();
-            messagePanel->addMessage("Searching for: " + searchText);
+            messagePanel->addMessage(std::string("Searching for: ") + searchText +
+                (useRegex ? "  [regex]" : "  [literal]") +
+                (caseSensitive ? "  [case]" : "  [icase]"));
         }
 
-        // Build grep command
         std::string cmd = "grep -n";
+        if (useRegex) cmd += " -E"; else cmd += " -F";
         if (!caseSensitive) cmd += " -i";
         if (recursive) cmd += " -r";
         cmd += " --include='*.*' -- ";
@@ -550,52 +606,250 @@ void TVIDEApp::findInFiles()
     }
 }
 
+// ── Find symbol ─────────────────────────────────────────────────────────
+
+namespace {
+
+bool isSourceExt(const std::string &name)
+{
+    auto dot = name.rfind('.');
+    if (dot == std::string::npos) return false;
+    std::string e = name.substr(dot + 1);
+    for (auto &c : e) c = (char)tolower((unsigned char)c);
+    static const char *exts[] = {
+        "php","phtml","html","htm","css","scss","less",
+        "js","jsx","mjs","ts","tsx","vue",
+        "json","md","markdown","yml","yaml","sql","xml","svg","xsl",
+        "twig","blade","latte", nullptr
+    };
+    for (int i = 0; exts[i]; i++) if (e == exts[i]) return true;
+    return false;
+}
+
+bool shouldSkipDir(const std::string &name)
+{
+    if (name.empty()) return true;
+    if (name[0] == '.') return true;
+    static const char *skip[] = {
+        "node_modules","vendor","build","dist","target","out",
+        "__pycache__","bower_components","coverage", nullptr
+    };
+    for (int i = 0; skip[i]; i++) if (name == skip[i]) return true;
+    return false;
+}
+
+void walkSourceFiles(const std::string &root, std::vector<std::string> &out, int depth = 0)
+{
+    if (depth > 16) return;
+    DIR *d = opendir(root.c_str());
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] == '.' &&
+            (e->d_name[1] == '\0' ||
+             (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+            continue;
+        std::string name = e->d_name;
+        std::string full = root + "/" + name;
+        struct stat st;
+        if (stat(full.c_str(), &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (shouldSkipDir(name)) continue;
+            walkSourceFiles(full, out, depth + 1);
+        } else if (S_ISREG(st.st_mode) && isSourceExt(name)) {
+            out.push_back(full);
+        }
+    }
+    closedir(d);
+}
+
+bool readFileToString(const std::string &path, std::string &out, size_t maxBytes = 2 * 1024 * 1024)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.seekg(0, std::ios::end);
+    auto sz = (size_t)f.tellg();
+    if (sz > maxBytes) return false;
+    f.seekg(0, std::ios::beg);
+    out.resize(sz);
+    if (sz > 0) f.read(&out[0], sz);
+    return true;
+}
+
+} // namespace
+
+void TVIDEApp::findSymbol()
+{
+    TDialog *d = createFindSymbolDialog();
+    if (!d) return;
+
+    struct {
+        char query[257];
+        char path[257];
+        ushort options;
+    } data;
+    memset(&data, 0, sizeof(data));
+
+    char defPath[MAXPATH] = {};
+    if (ProjectManager::instance().hasProject())
+        strncpy(defPath, ProjectManager::instance().getProject().rootPath.c_str(), MAXPATH - 1);
+    else if (fileTreePanel && !fileTreePanel->getCurrentDir().empty())
+        strncpy(defPath, fileTreePanel->getCurrentDir().c_str(), MAXPATH - 1);
+    else
+        getcwd(defPath, sizeof(defPath));
+    strncpy(data.path + 1, defPath, 255);
+    data.path[0] = (char)strlen(data.path + 1);
+    data.options = 0x02; // recursive default
+
+    if (execDialog(d, &data) != cmOK) return;
+
+    std::string query(data.query + 1, (unsigned char)data.query[0]);
+    std::string root(data.path + 1, (unsigned char)data.path[0]);
+    bool caseSensitive = (data.options & 0x01) != 0;
+    bool recursive     = (data.options & 0x02) != 0;
+    bool useRegex      = (data.options & 0x04) != 0;
+
+    if (query.empty()) return;
+    if (root.empty()) root = ".";
+
+    std::regex rx;
+    std::string lowerQuery = query;
+    if (!caseSensitive)
+        for (auto &c : lowerQuery) c = (char)tolower((unsigned char)c);
+    bool rxOk = false;
+    if (useRegex) {
+        try {
+            auto flags = std::regex::ECMAScript;
+            if (!caseSensitive) flags = flags | std::regex::icase;
+            rx = std::regex(query, flags);
+            rxOk = true;
+        } catch (const std::regex_error &) {
+            messageBox("Invalid regular expression.", mfError | mfOKButton);
+            return;
+        }
+    }
+
+    if (!messagePanel) toolMessages();
+    if (messagePanel) {
+        messagePanel->clear();
+        messagePanel->addMessage(std::string("Symbol search: ") + query +
+            (useRegex ? "  [regex]" : "  [literal]") +
+            (caseSensitive ? "  [case]" : "  [icase]") +
+            "  in " + root);
+    }
+
+    std::vector<std::string> files;
+    if (recursive) {
+        walkSourceFiles(root, files);
+    } else {
+        DIR *dr = opendir(root.c_str());
+        if (dr) {
+            struct dirent *e;
+            while ((e = readdir(dr)) != nullptr) {
+                if (e->d_name[0] == '.') continue;
+                std::string name = e->d_name;
+                std::string full = root + "/" + name;
+                struct stat st;
+                if (stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode) && isSourceExt(name))
+                    files.push_back(full);
+            }
+            closedir(dr);
+        }
+    }
+
+    int matches = 0;
+    int filesScanned = 0;
+    for (const auto &path : files) {
+        if (matches >= 1000) break;
+        filesScanned++;
+        std::unique_ptr<SyntaxLexer> lex(SyntaxLexer::createForFile(path));
+        if (!lex) continue;
+        const char *lang = lex->languageName();
+
+        std::string text;
+        if (!readFileToString(path, text)) continue;
+
+        std::vector<SymbolInfo> syms;
+        parseStructureText(lang, text, syms);
+        if (syms.empty()) continue;
+
+        for (const auto &s : syms) {
+            bool hit = false;
+            if (useRegex && rxOk) {
+                hit = std::regex_search(s.name, rx);
+            } else if (caseSensitive) {
+                hit = s.name.find(query) != std::string::npos;
+            } else {
+                std::string lo = s.name;
+                for (auto &c : lo) c = (char)tolower((unsigned char)c);
+                hit = lo.find(lowerQuery) != std::string::npos;
+            }
+            if (!hit) continue;
+
+            char line[1024];
+            snprintf(line, sizeof(line), "%s:%d: [%s] %s",
+                     path.c_str(), s.line, symbolKindName(s.kind), s.name.c_str());
+            if (messagePanel) messagePanel->addMessage(line);
+            matches++;
+            if (matches >= 1000) break;
+        }
+    }
+
+    if (messagePanel) {
+        char summary[128];
+        snprintf(summary, sizeof(summary),
+                 "Found %d symbol%s in %d file%s.",
+                 matches, matches == 1 ? "" : "s",
+                 filesScanned, filesScanned == 1 ? "" : "s");
+        messagePanel->addMessage(summary);
+    }
+}
+
 // ── Windows ─────────────────────────────────────────────────────────────
 
 void TVIDEApp::winCloseAll()
 {
-    // M1: Collect all editor windows first, then close — safe iteration
-    std::vector<TSyntaxEditWindow *> editors;
+    std::vector<TWindow *> wins;
     TView *v = deskTop->first();
     if (v) {
         TView *t = v;
         do {
-            auto *w = dynamic_cast<TSyntaxEditWindow *>(t);
-            if (w) editors.push_back(w);
+            auto *w = dynamic_cast<TWindow *>(t);
+            if (w && !dynamic_cast<TMessagePanel *>(w))
+                wins.push_back(w);
             t = t->next;
         } while (t != v);
     }
-    for (auto *w : editors)
+    for (auto *w : wins)
         w->close();
+    message(this, evBroadcast, cmWinListChanged, nullptr);
 }
 
 void TVIDEApp::winList()
 {
-    // M2: Implement window list dialog
-    std::vector<TSyntaxEditWindow *> editors;
+    std::vector<TWindow *> wins;
     TView *v = deskTop->first();
     if (v) {
         TView *t = v;
         do {
-            auto *w = dynamic_cast<TSyntaxEditWindow *>(t);
-            if (w) editors.push_back(w);
+            auto *w = dynamic_cast<TWindow *>(t);
+            if (w && !dynamic_cast<TMessagePanel *>(w))
+                wins.push_back(w);
             t = t->next;
         } while (t != v);
     }
-    if (editors.empty()) {
-        messageBox("No open editor windows.", mfInformation | mfOKButton);
+    if (wins.empty()) {
+        messageBox("No open windows.", mfInformation | mfOKButton);
         return;
     }
 
-    // Build list of window titles
-    auto *items = new TUnsortedStringCollection(editors.size() + 1, 5);
-    for (auto *w : editors) {
+    auto *items = new TUnsortedStringCollection(wins.size() + 1, 5);
+    for (auto *w : wins) {
         const char *title = w->getTitle(256);
         items->insert(newStr(title ? title : "Untitled"));
     }
 
-    // Create dialog
-    int dH = std::min((int)editors.size() + 6, (int)size.y - 4);
+    int dH = std::min((int)wins.size() + 6, (int)size.y - 4);
     int dW = std::min(50, (int)size.x - 4);
     auto *d = new TDialog(TRect(0, 0, dW, dH), "Window List");
     d->options |= ofCentered;
@@ -619,8 +873,8 @@ void TVIDEApp::winList()
     int sel = lb->focused;
     TObject::destroy(p);
 
-    if (result == cmOK && sel >= 0 && sel < (int)editors.size()) {
-        editors[sel]->select();
+    if (result == cmOK && sel >= 0 && sel < (int)wins.size()) {
+        wins[sel]->select();
     }
 }
 
@@ -652,10 +906,29 @@ void TVIDEApp::toolFileTree()
 
 void TVIDEApp::toolTerminal()
 {
-    suspend();
-    if (system("$SHELL") != 0) {}
-    resume();
-    redraw();
+    fileNewTerminal();
+}
+
+void TVIDEApp::toolWinList()
+{
+    if (winListPanel) {
+        if (winListPanel->state & sfVisible) {
+            winListPanel->hide();
+        } else {
+            winListPanel->show();
+            winListPanel->refresh();
+        }
+        relayout();
+        return;
+    }
+
+    int top = menuBar ? menuBar->size.y : 1;
+    int bot = size.y - (statusLine ? statusLine->size.y : 1);
+    TRect r(0, top, winListWidth, bot);
+    winListPanel = new TWindowListPanel(r);
+    insert(winListPanel);
+    winListPanel->refresh();
+    relayout();
 }
 
 void TVIDEApp::toolMessages()
@@ -710,41 +983,97 @@ void TVIDEApp::toolOptions()
     TDialog *d = createOptionsDialog();
     if (!d) return;
 
-    // Pack current settings into dialog data
+    // Layout matches insertion order in createOptionsDialog():
+    //   1. Editor checkboxes (8)
+    //   2. Tab size input (4 + 1)
+    //   3. File tree sort radio
+    //   4. Dirs-first checkbox
+    //   5. Structure sort radio
     struct {
-        ushort checkboxes;      // 7 checkboxes bitfield
-        char tabSize[4 + 1];    // TInputLine data (length prefix + chars)
+        ushort editorCB;
+        char   tabSize[5];
+        ushort ftSort;
+        ushort dirsFirstCB;
+        ushort structSort;
     } data;
     memset(&data, 0, sizeof(data));
 
-    // Checkboxes: bit 0=lineNums, 1=syntax, 2=whitespace, 3=EOL, 4=autoIndent, 5=bracket, 6=useTabs, 7=autoClose
-    data.checkboxes = 0;
-    if (settings.showLineNumbers)    data.checkboxes |= 0x01;
-    if (settings.syntaxHighlight)    data.checkboxes |= 0x02;
-    if (settings.showWhitespace)     data.checkboxes |= 0x04;
-    if (settings.showEOL)            data.checkboxes |= 0x08;
-    if (settings.autoIndent)         data.checkboxes |= 0x10;
-    if (settings.bracketMatch)       data.checkboxes |= 0x20;
-    if (settings.useTabs)            data.checkboxes |= 0x40;
-    if (settings.autoCloseBrackets)  data.checkboxes |= 0x80;
+    if (settings.showLineNumbers)    data.editorCB |= 0x01;
+    if (settings.syntaxHighlight)    data.editorCB |= 0x02;
+    if (settings.showWhitespace)     data.editorCB |= 0x04;
+    if (settings.showEOL)            data.editorCB |= 0x08;
+    if (settings.autoIndent)         data.editorCB |= 0x10;
+    if (settings.bracketMatch)       data.editorCB |= 0x20;
+    if (settings.useTabs)            data.editorCB |= 0x40;
+    if (settings.autoCloseBrackets)  data.editorCB |= 0x80;
 
     snprintf(data.tabSize + 1, sizeof(data.tabSize) - 1, "%d", settings.tabSize);
     data.tabSize[0] = (char)strlen(data.tabSize + 1);
 
+    if (fileTreePanel) {
+        switch (fileTreePanel->getSortMode()) {
+        case FileSortMode::NameAsc:  data.ftSort = 0; break;
+        case FileSortMode::NameDesc: data.ftSort = 1; break;
+        case FileSortMode::DateAsc:  data.ftSort = 2; break;
+        case FileSortMode::DateDesc: data.ftSort = 3; break;
+        }
+        if (fileTreePanel->getDirsFirst()) data.dirsFirstCB |= 0x01;
+    } else {
+        data.ftSort = 0;
+        data.dirsFirstCB = 0x01;
+    }
+
+    if (structurePanel) {
+        switch (structurePanel->getSortMode()) {
+        case SymbolSortMode::LineAsc:  data.structSort = 0; break;
+        case SymbolSortMode::LineDesc: data.structSort = 1; break;
+        case SymbolSortMode::NameAsc:  data.structSort = 2; break;
+        case SymbolSortMode::NameDesc: data.structSort = 3; break;
+        case SymbolSortMode::KindAsc:  data.structSort = 4; break;
+        case SymbolSortMode::KindDesc: data.structSort = 5; break;
+        }
+    } else {
+        data.structSort = 0;
+    }
+
     if (execDialog(d, &data) == cmOK) {
-        settings.showLineNumbers    = (data.checkboxes & 0x01) != 0;
-        settings.syntaxHighlight    = (data.checkboxes & 0x02) != 0;
-        settings.showWhitespace     = (data.checkboxes & 0x04) != 0;
-        settings.showEOL            = (data.checkboxes & 0x08) != 0;
-        settings.autoIndent         = (data.checkboxes & 0x10) != 0;
-        settings.bracketMatch       = (data.checkboxes & 0x20) != 0;
-        settings.useTabs            = (data.checkboxes & 0x40) != 0;
-        settings.autoCloseBrackets  = (data.checkboxes & 0x80) != 0;
+        settings.showLineNumbers    = (data.editorCB & 0x01) != 0;
+        settings.syntaxHighlight    = (data.editorCB & 0x02) != 0;
+        settings.showWhitespace     = (data.editorCB & 0x04) != 0;
+        settings.showEOL            = (data.editorCB & 0x08) != 0;
+        settings.autoIndent         = (data.editorCB & 0x10) != 0;
+        settings.bracketMatch       = (data.editorCB & 0x20) != 0;
+        settings.useTabs            = (data.editorCB & 0x40) != 0;
+        settings.autoCloseBrackets  = (data.editorCB & 0x80) != 0;
 
         int ts = atoi(data.tabSize + 1);
         if (ts >= 1 && ts <= 16) settings.tabSize = ts;
 
-        // Refresh all editor windows
+        if (fileTreePanel) {
+            FileSortMode fm = FileSortMode::NameAsc;
+            switch (data.ftSort) {
+            case 0: fm = FileSortMode::NameAsc;  break;
+            case 1: fm = FileSortMode::NameDesc; break;
+            case 2: fm = FileSortMode::DateAsc;  break;
+            case 3: fm = FileSortMode::DateDesc; break;
+            }
+            fileTreePanel->setSortMode(fm);
+            fileTreePanel->setDirsFirst((data.dirsFirstCB & 0x01) != 0);
+        }
+
+        if (structurePanel) {
+            SymbolSortMode sm = SymbolSortMode::LineAsc;
+            switch (data.structSort) {
+            case 0: sm = SymbolSortMode::LineAsc;  break;
+            case 1: sm = SymbolSortMode::LineDesc; break;
+            case 2: sm = SymbolSortMode::NameAsc;  break;
+            case 3: sm = SymbolSortMode::NameDesc; break;
+            case 4: sm = SymbolSortMode::KindAsc;  break;
+            case 5: sm = SymbolSortMode::KindDesc; break;
+            }
+            structurePanel->setSortMode(sm);
+        }
+
         redraw();
     }
 }
@@ -803,36 +1132,14 @@ void TVIDEApp::projectOpen(const std::string &path)
 
 void TVIDEApp::projectOpen()
 {
-    // Create a dialog asking for the project directory
-    auto *d = new TDialog(TRect(0, 0, 50, 9), "Open Project");
-    d->options |= ofCentered;
-
-    auto *input = new TInputLine(TRect(3, 3, 44, 4), MAXPATH);
-    d->insert(input);
-    d->insert(new TLabel(TRect(2, 2, 20, 3), "~P~roject directory", input));
-    d->insert(new THistory(TRect(44, 3, 47, 4), input, 20));
-
-    d->insert(new TButton(TRect(12, 6, 24, 8), "O~K~", cmOK, bfDefault));
-    d->insert(new TButton(TRect(26, 6, 38, 8), "Cancel", cmCancel, bfNormal));
-    d->selectNext(False);
-
-    // L3: Pre-fill with current working directory using TInputLine format (length-prefixed)
-    char cwd[MAXPATH];
-    char dirBuf[MAXPATH + 2] = {};
-    if (getcwd(cwd, sizeof(cwd))) {
-        int len = strlen(cwd);
-        if (len > MAXPATH) len = MAXPATH;
-        dirBuf[0] = (char)len;
-        std::memcpy(dirBuf + 1, cwd, len);
-    }
-
-    if (execDialog(d, dirBuf) == cmOK) {
-        // Extract from length-prefixed format
-        int len = (unsigned char)dirBuf[0];
-        std::string path(dirBuf + 1, len);
-        if (!path.empty())
-            projectOpen(path);
-    }
+    auto *d = new OpenProjectDialog();
+    TView *p = validView(d);
+    if (!p) return;
+    ushort result = deskTop->execView(p);
+    std::string chosen = d->getSelectedPath();
+    TObject::destroy(p);
+    if (result == cmOK && !chosen.empty())
+        projectOpen(chosen);
 }
 
 void TVIDEApp::projectClose()
@@ -863,6 +1170,23 @@ void TVIDEApp::idle()
     TApplication::idle();
 
     if (!deskTop) return;
+
+    message(this, evBroadcast, cmCheckTerminalUpdates, nullptr);
+
+    int deskCount = 0;
+    {
+        TView *p = deskTop->first();
+        if (p) {
+            TView *t = p;
+            do { deskCount++; t = t->next; } while (t != p);
+        }
+    }
+    static int lastDeskCount = -1;
+    if (deskCount != lastDeskCount) {
+        lastDeskCount = deskCount;
+        if (winListPanel && (winListPanel->state & sfVisible))
+            winListPanel->refresh();
+    }
 
     // Find current editor window (if focused view is one)
     TView *v = deskTop->current;
@@ -937,15 +1261,34 @@ void TVIDEApp::relayout()
     int leftW = 0;
     int rightW = 0;
 
-    // Position file tree panel (left dock)
-    if (fileTreePanel && (fileTreePanel->state & sfVisible)) {
-        leftW = fileTreePanel->size.x;
-        if (leftW < 15) leftW = 15;
-        if (leftW > appW / 3) leftW = appW / 3;
-        fileTreeWidth = leftW;
-        TRect lr(0, top, leftW, bot);
-        // Use TWindow::changeBounds directly to avoid re-broadcast
+    bool ftVis = fileTreePanel && (fileTreePanel->state & sfVisible);
+    bool wlVis = winListPanel && (winListPanel->state & sfVisible);
+
+    if (ftVis || wlVis) {
+        int w = ftVis ? fileTreePanel->size.x : winListPanel->size.x;
+        if (ftVis && wlVis) {
+            int alt = winListPanel->size.x;
+            if (alt > w) w = alt;
+        }
+        if (w < 15) w = 15;
+        if (w > appW / 3) w = appW / 3;
+        leftW = w;
+        if (ftVis) fileTreeWidth = leftW;
+        if (wlVis) winListWidth = leftW;
+    }
+
+    if (ftVis && wlVis) {
+        int half = (bot - top) / 2;
+        TRect lr(0, top, leftW, top + half);
         fileTreePanel->TWindow::changeBounds(lr);
+        TRect wr(0, top + half, leftW, bot);
+        winListPanel->TWindow::changeBounds(wr);
+    } else if (ftVis) {
+        TRect lr(0, top, leftW, bot);
+        fileTreePanel->TWindow::changeBounds(lr);
+    } else if (wlVis) {
+        TRect wr(0, top, leftW, bot);
+        winListPanel->TWindow::changeBounds(wr);
     }
 
     // Position structure panel (right dock)

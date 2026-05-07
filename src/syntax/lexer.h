@@ -255,4 +255,98 @@ public:
     const char *languageName() const override { return "Text"; }
 };
 
+// ── C-family lexer (shared tokenizer, per-language keyword sets) ────────
+class CLikeLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+protected:
+    virtual const std::unordered_set<std::string> &keywords() const = 0;
+    virtual const std::unordered_set<std::string> &types() const;
+    virtual bool hasPreprocessor() const { return false; } // # directives at line start
+};
+
+#define DECL_CLIKE(Cls, Name) \
+class Cls : public CLikeLexer { \
+public: \
+    const char *languageName() const override { return Name; } \
+protected: \
+    const std::unordered_set<std::string> &keywords() const override; \
+    const std::unordered_set<std::string> &types() const override; \
+};
+
+DECL_CLIKE(CppLexer,    "C/C++")
+DECL_CLIKE(JavaLexer,   "Java")
+DECL_CLIKE(CSharpLexer, "C#")
+DECL_CLIKE(GoLexer,     "Go")
+DECL_CLIKE(RustLexer,   "Rust")
+DECL_CLIKE(KotlinLexer, "Kotlin")
+DECL_CLIKE(SwiftLexer,  "Swift")
+DECL_CLIKE(LuaLexer,    "Lua")
+
+class CppLexerWithPP : public CppLexer {
+protected:
+    bool hasPreprocessor() const override { return true; }
+};
+
+#undef DECL_CLIKE
+
+// ── Python ─────────────────────────────────────────────────────────────
+class PythonLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+    const char *languageName() const override { return "Python"; }
+};
+
+// ── Shell (sh/bash/zsh) ────────────────────────────────────────────────
+class ShellLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+    const char *languageName() const override { return "Shell"; }
+};
+
+// ── Ruby ───────────────────────────────────────────────────────────────
+class RubyLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+    const char *languageName() const override { return "Ruby"; }
+};
+
+// ── Dockerfile ─────────────────────────────────────────────────────────
+class DockerfileLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+    const char *languageName() const override { return "Dockerfile"; }
+};
+
+// ── Makefile ───────────────────────────────────────────────────────────
+class MakefileLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+    const char *languageName() const override { return "Makefile"; }
+};
+
+// ── INI / TOML / .env / .conf ──────────────────────────────────────────
+class IniLexer : public SyntaxLexer {
+public:
+    LexerState tokenizeLine(const char *line, int length,
+                            LexerState inState, std::vector<Token> &tokens) override;
+    const char *languageName() const override { return "INI"; }
+};
+
+class TomlLexer : public IniLexer {
+public:
+    const char *languageName() const override { return "TOML"; }
+};
+
+class DotEnvLexer : public IniLexer {
+public:
+    const char *languageName() const override { return ".env"; }
+};
+
 #endif // TVIDE_SYNTAX_LEXER_H

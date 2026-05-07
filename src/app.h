@@ -43,6 +43,8 @@
 #define Uses_TGroup
 #define Uses_TIndicator
 #define Uses_TDrawBuffer
+#define Uses_TTerminal
+#define Uses_TTextDevice
 #include <tvision/tv.h>
 
 #include <string>
@@ -55,6 +57,8 @@ class TSyntaxEditWindow;
 class TFileTreePanel;
 class TMessagePanel;
 class TStructurePanel;
+class TWindowListPanel;
+class TTerminalWindow;
 
 // Custom command IDs (avoid conflicts with tvision built-in IDs)
 const ushort cmOpenFile      = 2001;
@@ -71,6 +75,7 @@ const ushort cmSearchReplace = 2021;
 const ushort cmSearchAgn     = 2022;
 const ushort cmGotoLine      = 2023;
 const ushort cmFindInFiles   = 2024;
+const ushort cmFindSymbol    = 2025;
 
 const ushort cmWinCloseAll   = 2032;
 const ushort cmWinList       = 2035;
@@ -81,6 +86,20 @@ const ushort cmToolFileTree  = 2042;
 const ushort cmToolMessages  = 2043;
 const ushort cmToolColors    = 2044;
 const ushort cmToolStructure = 2045;
+const ushort cmToolWinList   = 2046; // window list tool panel (persistent)
+const ushort cmFileNewTerm   = 2047; // new terminal window
+const ushort cmSortNameAsc   = 2080;
+const ushort cmSortNameDesc  = 2081;
+const ushort cmSortDateAsc   = 2082;
+const ushort cmSortDateDesc  = 2083;
+const ushort cmSortDirsFirst = 2084; // toggle dirs-first vs mixed
+
+// Terminal infra (consumed by tvterm::BasicTerminalWindow)
+const ushort cmCheckTerminalUpdates = 2200;
+const ushort cmTerminalUpdated      = 2201;
+const ushort cmGrabInput            = 2202;
+const ushort cmReleaseInput         = 2203;
+const ushort hcInputGrabbed         = 2210;
 
 const ushort cmHelpAbout     = 2050;
 
@@ -89,6 +108,9 @@ const ushort cmProjectClose = 2061;
 
 const ushort cmFileTreeOpen = 2070; // sent by file tree with infoPtr=filename
 const ushort cmRelayout     = 2071; // trigger layout recalculation
+const ushort cmWinListSelect = 2072; // sent by win-list panel; infoPtr = TWindow*
+const ushort cmWinListClose  = 2073; // sent by win-list panel; infoPtr = TWindow*
+const ushort cmWinListChanged = 2074; // broadcast: refresh win-list panels
 
 // Application class
 class TVIDEApp : public TApplication {
@@ -120,6 +142,7 @@ private:
     void searchReplace();
     void gotoLine();
     void findInFiles();
+    void findSymbol();
 
     void winCloseAll();
     void winList();
@@ -130,6 +153,8 @@ private:
     void toolFileTree();
     void toolMessages();
     void toolStructure();
+    void toolWinList();
+    void fileNewTerminal();
 
     void projectOpen();
     void projectOpen(const std::string &path);
@@ -141,13 +166,16 @@ private:
     TSyntaxEditWindow *getActiveEditor();
 
     int windowCount;
+    int terminalCount;
     TFileTreePanel *fileTreePanel;
     TMessagePanel *messagePanel;
     TStructurePanel *structurePanel;
+    TWindowListPanel *winListPanel;
     TSyntaxEditWindow *lastEditorWindow;  // last focused editor (for structure panel)
     TSyntaxEditor *lastStructEditor;       // L13: tracks last editor used for structure panel
     int fileTreeWidth;     // persisted width for file tree panel
     int structureWidth;    // persisted width for structure panel
+    int winListWidth;      // persisted width for window list panel
 };
 
 // Dialog helpers

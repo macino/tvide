@@ -538,6 +538,50 @@ void parseStructure(TSyntaxEditor *editor, std::vector<SymbolInfo> &syms)
     // For other languages, no symbols shown
 }
 
+void parseStructureText(const char *lang, const std::string &text,
+                        std::vector<SymbolInfo> &syms)
+{
+    if (!lang || text.empty()) return;
+    if (strcmp(lang, "PHP") == 0)
+        parsePhp(text, syms);
+    else if (strcmp(lang, "JavaScript") == 0 || strcmp(lang, "TypeScript") == 0)
+        parseJsTs(text, syms);
+    else if (strcmp(lang, "HTML") == 0 || strcmp(lang, "Vue") == 0 || strcmp(lang, "XML") == 0)
+        parseHtml(text, syms);
+    else if (strcmp(lang, "CSS") == 0)
+        parseCss(text, syms);
+    else if (strcmp(lang, "JSON") == 0)
+        parseJson(text, syms);
+    else if (strcmp(lang, "YAML") == 0)
+        parseYaml(text, syms);
+    else if (strcmp(lang, "Markdown") == 0)
+        parseMarkdown(text, syms);
+    else if (strcmp(lang, "SQL") == 0)
+        parseSql(text, syms);
+}
+
+const char *symbolKindName(SymbolKind k)
+{
+    switch (k) {
+    case SymbolKind::Class:       return "class";
+    case SymbolKind::Interface:   return "interface";
+    case SymbolKind::Trait:       return "trait";
+    case SymbolKind::Enum:        return "enum";
+    case SymbolKind::Function:    return "function";
+    case SymbolKind::Method:      return "method";
+    case SymbolKind::Constructor: return "ctor";
+    case SymbolKind::Property:    return "property";
+    case SymbolKind::Variable:    return "var";
+    case SymbolKind::Constant:    return "const";
+    case SymbolKind::Namespace:   return "namespace";
+    case SymbolKind::Heading:     return "heading";
+    case SymbolKind::Tag:         return "tag";
+    case SymbolKind::Selector:    return "selector";
+    case SymbolKind::Key:         return "key";
+    }
+    return "?";
+}
+
 // ── TStructurePanel ─────────────────────────────────────────────────────
 
 TStructurePanel::TStructurePanel(const TRect &bounds)
@@ -587,13 +631,52 @@ void TStructurePanel::refresh(TSyntaxEditor *editor)
     if (editor)
         parseStructure(editor, symbols);
 
-    // Build display list
+    rebuildList();
+}
+
+void TStructurePanel::rebuildList()
+{
+    auto cmpName = [](const SymbolInfo &a, const SymbolInfo &b) {
+        if (a.name == b.name) return a.line < b.line;
+        return a.name < b.name;
+    };
+    auto cmpKind = [](const SymbolInfo &a, const SymbolInfo &b) {
+        if (a.kind != b.kind) return (int)a.kind < (int)b.kind;
+        return a.line < b.line;
+    };
+
+    bool flatten = (sortMode != SymbolSortMode::LineAsc);
+    if (flatten) {
+        switch (sortMode) {
+        case SymbolSortMode::LineDesc:
+            std::sort(symbols.begin(), symbols.end(),
+                [](const SymbolInfo &a, const SymbolInfo &b) { return a.line > b.line; });
+            break;
+        case SymbolSortMode::NameAsc:
+            std::sort(symbols.begin(), symbols.end(), cmpName);
+            break;
+        case SymbolSortMode::NameDesc:
+            std::sort(symbols.begin(), symbols.end(),
+                [&](const SymbolInfo &a, const SymbolInfo &b) { return cmpName(b, a); });
+            break;
+        case SymbolSortMode::KindAsc:
+            std::sort(symbols.begin(), symbols.end(), cmpKind);
+            break;
+        case SymbolSortMode::KindDesc:
+            std::sort(symbols.begin(), symbols.end(),
+                [&](const SymbolInfo &a, const SymbolInfo &b) { return cmpKind(b, a); });
+            break;
+        default: break;
+        }
+    }
+
     auto *newItems = new TUnsortedStringCollection(symbols.size() + 1, 10);
     for (auto &sym : symbols) {
         std::string display;
-        // Indent based on depth
-        for (int i = 0; i < sym.depth; i++)
-            display += "  ";
+        if (!flatten) {
+            for (int i = 0; i < sym.depth; i++)
+                display += "  ";
+        }
         display += symbolIcon(sym.kind);
         display += sym.name;
 
@@ -607,6 +690,14 @@ void TStructurePanel::refresh(TSyntaxEditor *editor)
     listBox->newList(newItems);
     items = newItems;
     drawView();
+}
+
+void TStructurePanel::setSortMode(SymbolSortMode mode)
+{
+    if (sortMode == mode) return;
+    sortMode = mode;
+    if (trackedEditor) refresh(trackedEditor);
+    else rebuildList();
 }
 
 void TStructurePanel::navigateToSymbol()

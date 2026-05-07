@@ -20,6 +20,14 @@ private:
     virtual void writeItem(void *, opstream &) override {}
 };
 
+// File-tree sort mode
+enum class FileSortMode {
+    NameAsc,
+    NameDesc,
+    DateAsc,
+    DateDesc,
+};
+
 // Tree node for file browser
 struct FileNode {
     std::string name;
@@ -28,6 +36,7 @@ struct FileNode {
     bool expanded = false;
     bool childrenLoaded = false;
     int depth = 0;
+    long mtime = 0; // last-modified time (seconds since epoch)
     std::vector<FileNode> children;
 };
 
@@ -57,13 +66,24 @@ public:
     void refreshDir(const std::string &path);
     const std::string &getCurrentDir() const { return rootPath; }
 
+    void setSortMode(FileSortMode mode);
+    FileSortMode getSortMode() const { return sortMode; }
+    void cycleSortMode();
+
+    void setDirsFirst(bool on);
+    bool getDirsFirst() const { return dirsFirst; }
+    void toggleDirsFirst();
+
 private:
     TFileTreeListBox *listBox;
     TScrollBar *scrollBar;
     TUnsortedStringCollection *fileList;
     std::string rootPath;
     FileNode root;
+    FileSortMode sortMode = FileSortMode::NameAsc;
+    bool dirsFirst = true;
     std::vector<FileNode *> flatList; // parallel to listBox items
+    void resortAll(FileNode &node);
 
     void loadChildren(FileNode &node);
     void rebuildFlatList();
@@ -89,6 +109,16 @@ private:
     TUnsortedStringCollection *messages;
 };
 
+// Sort mode for the structure panel
+enum class SymbolSortMode {
+    LineAsc,    // source order (default)
+    LineDesc,
+    NameAsc,
+    NameDesc,
+    KindAsc,    // group by kind, then by line
+    KindDesc,
+};
+
 // Symbol kinds for the structure panel
 enum class SymbolKind {
     Class, Interface, Trait, Enum,
@@ -112,6 +142,65 @@ struct SymbolInfo {
 // Parse symbols from the current editor
 void parseStructure(TSyntaxEditor *editor, std::vector<SymbolInfo> &syms);
 
+// Parse symbols from raw text + language name (e.g. "PHP", "JavaScript", ...)
+void parseStructureText(const char *languageName, const std::string &text,
+                        std::vector<SymbolInfo> &syms);
+
+// Symbol-kind name as a short string (e.g. "class", "function") for display.
+const char *symbolKindName(SymbolKind k);
+
+// ── Window list tool panel (left-docked) ───────────────────────────────
+// Lists open windows on the desktop (editors + terminals). Enter / dbl-click focuses.
+
+class TWindowListPanel : public TWindow {
+public:
+    TWindowListPanel(const TRect &bounds);
+    virtual ~TWindowListPanel();
+
+    virtual void handleEvent(TEvent &event) override;
+    virtual void changeBounds(const TRect &bounds) override;
+    virtual void sizeLimits(TPoint &min, TPoint &max) override;
+    virtual TPalette &getPalette() const override;
+
+    void refresh(); // rebuild from current desktop state
+
+private:
+    TListBox *listBox;
+    TScrollBar *scrollBar;
+    TUnsortedStringCollection *items;
+    std::vector<TWindow *> windows; // parallel to list items
+
+    void activateFocused();
+    void closeFocused();
+};
+
+// ── Terminal window (libvterm-backed, lives on desktop like an editor) ──
+namespace tvterm {
+    class TerminalController;
+    struct TVTermConstants;
+}
+#include <tvterm/termwnd.h>
+
+class TTerminalWindow : public tvterm::BasicTerminalWindow {
+public:
+    static const tvterm::TVTermConstants appConsts;
+
+    TTerminalWindow(const TRect &bounds, tvterm::TerminalController &term,
+                    int aNumber, const char *aTitle = nullptr) noexcept;
+
+    virtual void handleEvent(TEvent &ev) override;
+    virtual void sizeLimits(TPoint &min, TPoint &max) override;
+    virtual const char *getTitle(short maxSize) override;
+
+    static tvterm::TerminalController *createController(TPoint size);
+
+private:
+    using Super = tvterm::BasicTerminalWindow;
+    tvterm::TerminalController &termCtrl;
+    int windowNumber;
+    std::string customTitle;
+};
+
 // Custom list box with blue focused item
 class TStructureListBox : public TListBox {
 public:
@@ -133,14 +222,19 @@ public:
     // Refresh the symbol list from the given editor
     void refresh(TSyntaxEditor *editor);
 
+    void setSortMode(SymbolSortMode mode);
+    SymbolSortMode getSortMode() const { return sortMode; }
+
 private:
     TStructureListBox *listBox;
     TScrollBar *scrollBar;
     TUnsortedStringCollection *items;
     std::vector<SymbolInfo> symbols; // parallel to list items
     TSyntaxEditor *trackedEditor;
+    SymbolSortMode sortMode = SymbolSortMode::LineAsc;
 
     void navigateToSymbol();
+    void rebuildList();
 };
 
 #endif // TVIDE_PANELS_H

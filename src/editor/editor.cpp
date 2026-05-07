@@ -208,8 +208,9 @@ void TSyntaxEditor::drawSyntaxLine(TDrawBuffer &b, uint linePtr,
     int pos = 0; // screen column position
     int x = 0;   // output column (after hScroll adjustment)
 
-    for (int i = 0; i < lineLen; i++) {
-        char ch = lineBuf[i];
+    int i = 0;
+    while (i < lineLen) {
+        unsigned char ch = (unsigned char)lineBuf[i];
         bool selected = ((uint)i >= selS && (uint)i < selE);
         bool isBracketHL = (i == bracketHL1 || i == bracketHL2);
         TColorAttr color = selected ? selColor
@@ -229,17 +230,42 @@ void TSyntaxEditor::drawSyntaxLine(TDrawBuffer &b, uint linePtr,
                 }
                 pos++;
             }
-        } else {
+            i++;
+            continue;
+        }
+
+        if (ch < 0x80) {
             if (pos >= hScroll && x < width) {
                 if (showWS && ch == ' ')
                     b.moveChar(x, settings.spaceChar,
                                selected ? selColor : wsColor, 1);
                 else
-                    b.moveChar(x, ch, color, 1);
+                    b.moveChar(x, (char)ch, color, 1);
                 x++;
             }
             pos++;
+            i++;
+            continue;
         }
+
+        // UTF-8 multibyte: gather full sequence and emit as one moveStr.
+        int seqLen = 1;
+        if      ((ch & 0xE0) == 0xC0) seqLen = 2;
+        else if ((ch & 0xF0) == 0xE0) seqLen = 3;
+        else if ((ch & 0xF8) == 0xF0) seqLen = 4;
+        if (i + seqLen > lineLen) seqLen = 1;
+        for (int k = 1; k < seqLen; k++) {
+            if (((unsigned char)lineBuf[i + k] & 0xC0) != 0x80) { seqLen = k; break; }
+        }
+        if (pos >= hScroll && x < width) {
+            ushort drawn = b.moveStr(x, TStringView(lineBuf + i, seqLen), color);
+            int colsAdvanced = drawn > 0 ? (int)drawn : 1;
+            x += colsAdvanced;
+            pos += colsAdvanced;
+        } else {
+            pos += 1;
+        }
+        i += seqLen;
     }
 
     // Show EOL marker if enabled
@@ -613,16 +639,20 @@ void TSyntaxEditor::matchBracket()
 
 TDialog *createOptionsDialog()
 {
-    // L2: Cap dialog size to terminal
-    int dW = 42, dH = 20;
+    int dW = 70, dH = 22;
     if (TProgram::deskTop) {
         dW = std::min(dW, (int)TProgram::deskTop->size.x - 2);
         dH = std::min(dH, (int)TProgram::deskTop->size.y - 2);
     }
-    auto *d = new TDialog(TRect(0, 0, dW, dH), "Editor Options");
+    auto *d = new TDialog(TRect(0, 0, dW, dH), "Options");
     d->options |= ofCentered;
 
-    d->insert(new TCheckBoxes(TRect(3, 2, dW - 3, 10),
+    int colW = (dW - 6) / 2;
+    int leftX = 3;
+    int midX = leftX + colW + 1;
+
+    d->insert(new TStaticText(TRect(leftX, 1, leftX + colW, 2), "─ Editor ─"));
+    d->insert(new TCheckBoxes(TRect(leftX, 2, leftX + colW, 10),
         new TSItem("~L~ine numbers",
         new TSItem("~S~yntax highlighting",
         new TSItem("Show ~w~hitespace",
@@ -632,12 +662,32 @@ TDialog *createOptionsDialog()
         new TSItem("Use ~t~abs (uncheck = spaces)",
         new TSItem("Auto-~c~lose brackets", nullptr))))))))));
 
-    auto *tabInput = new TInputLine(TRect(16, 11, 22, 12), 4);
+    auto *tabInput = new TInputLine(TRect(leftX + 13, 11, leftX + 19, 12), 4);
     d->insert(tabInput);
-    d->insert(new TLabel(TRect(3, 11, 15, 12), "~T~ab size", tabInput));
+    d->insert(new TLabel(TRect(leftX, 11, leftX + 12, 12), "~T~ab size", tabInput));
 
-    d->insert(new TButton(TRect(8, dH - 4, 20, dH - 2), "O~K~", cmOK, bfDefault));
-    d->insert(new TButton(TRect(22, dH - 4, 34, dH - 2), "Cancel", cmCancel, bfNormal));
+    d->insert(new TStaticText(TRect(midX, 1, dW - 2, 2), "─ File tree sort ─"));
+    d->insert(new TRadioButtons(TRect(midX, 2, dW - 2, 6),
+        new TSItem("~N~ame asc",
+        new TSItem("Name ~d~esc",
+        new TSItem("D~a~te asc",
+        new TSItem("Date des~c~", nullptr))))));
+    d->insert(new TCheckBoxes(TRect(midX, 6, dW - 2, 7),
+        new TSItem("~D~irs first", nullptr)));
+
+    d->insert(new TStaticText(TRect(midX, 8, dW - 2, 9), "─ Structure sort ─"));
+    d->insert(new TRadioButtons(TRect(midX, 9, dW - 2, 15),
+        new TSItem("Li~n~e asc",
+        new TSItem("L~i~ne desc",
+        new TSItem("Na~m~e asc",
+        new TSItem("Name d~e~sc",
+        new TSItem("~K~ind asc",
+        new TSItem("Kin~d~ desc", nullptr))))))));
+
+    d->insert(new TButton(TRect(dW/2 - 11, dH - 3, dW/2 - 1, dH - 1),
+                          "O~K~", cmOK, bfDefault));
+    d->insert(new TButton(TRect(dW/2 + 1, dH - 3, dW/2 + 11, dH - 1),
+                          "Cancel", cmCancel, bfNormal));
 
     d->selectNext(False);
     return d;
