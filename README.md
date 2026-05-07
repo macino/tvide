@@ -7,6 +7,21 @@ fork of Borland's classic Turbo Vision — and inspired by RHIDE.
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 
+## Screenshots
+
+Default workspace — file tree, window list, structure panel pre-opened:
+
+![startup](docs/screenshots/01-startup.png)
+
+Editing a file with markdown syntax highlighting and live structure outline:
+
+![editing markdown](docs/screenshots/02-editing.png)
+
+Editing C++ source with syntax highlighting, line gutter, and the open-window
+list panel:
+
+![editing code](docs/screenshots/03-code.png)
+
 ## Features
 
 ### Editor
