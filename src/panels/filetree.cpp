@@ -317,8 +317,10 @@ void TFileTreePanel::toggleOrOpen()
 
     FileNode *node = flatList[idx];
     if (node->isDir) {
+        bool wasExpanded = node->expanded;
+        int oldTopItem = listBox->topItem;
         // Toggle expand/collapse
-        if (node->expanded) {
+        if (wasExpanded) {
             node->expanded = false;
         } else {
             node->expanded = true;
@@ -328,6 +330,18 @@ void TFileTreePanel::toggleOrOpen()
         // Keep focus on the toggled directory
         if (idx < (int)flatList.size())
             listBox->focusItem(idx);
+
+        // On expand: keep dir visible WITHOUT shifting it to the bottom — preserve
+        // the original scroll offset so children appear below the dir in-view.
+        if (!wasExpanded) {
+            int rows = listBox->size.y;
+            int newTop = oldTopItem;
+            // Ensure dir is still visible
+            if (idx < newTop) newTop = idx;
+            if (idx >= newTop + rows) newTop = std::max(0, idx - rows / 3);
+            listBox->topItem = newTop;
+            listBox->drawView();
+        }
     } else {
         // Open file — copy path to static buffer for safe message passing
         static char pathBuf[PATH_MAX];

@@ -1,6 +1,7 @@
 #include "lexer.h"
 #include <cctype>
 #include <cstring>
+#include <memory>
 
 LexerState MarkdownLexer::tokenizeLine(const char *line, int length,
                                         LexerState inState,
@@ -12,18 +13,62 @@ LexerState MarkdownLexer::tokenizeLine(const char *line, int length,
 
     int i = 0;
 
+    auto langLexer = [](const std::string &lang) -> SyntaxLexer * {
+        if (lang.empty()) return nullptr;
+        std::string e = lang;
+        for (auto &c : e) c = (char)tolower((unsigned char)c);
+        if (e == "php" || e == "phtml") return new PhpLexer();
+        if (e == "html" || e == "htm")  return new HtmlLexer();
+        if (e == "css" || e == "scss" || e == "less") return new CssLexer();
+        if (e == "js" || e == "javascript" || e == "jsx") return new JavaScriptLexer();
+        if (e == "ts" || e == "typescript" || e == "tsx") return new TypeScriptLexer();
+        if (e == "json") return new JsonLexer();
+        if (e == "yaml" || e == "yml") return new YamlLexer();
+        if (e == "sql")  return new SqlLexer();
+        if (e == "xml" || e == "svg")  return new XmlLexer();
+        if (e == "vue")  return new VueLexer();
+        if (e == "py" || e == "python") return new PythonLexer();
+        if (e == "sh" || e == "bash" || e == "shell" || e == "zsh") return new ShellLexer();
+        if (e == "rb" || e == "ruby")   return new RubyLexer();
+        if (e == "c" || e == "cpp" || e == "c++" || e == "cxx") return new CppLexer();
+        if (e == "java")    return new JavaLexer();
+        if (e == "cs" || e == "csharp") return new CSharpLexer();
+        if (e == "go")      return new GoLexer();
+        if (e == "rs" || e == "rust")   return new RustLexer();
+        if (e == "kt" || e == "kotlin") return new KotlinLexer();
+        if (e == "swift")   return new SwiftLexer();
+        if (e == "lua")     return new LuaLexer();
+        if (e == "dockerfile") return new DockerfileLexer();
+        if (e == "make" || e == "makefile") return new MakefileLexer();
+        if (e == "ini" || e == "toml" || e == "env") return new IniLexer();
+        return nullptr;
+    };
+
     // Fenced code block continuation
     if (inState == LexerState::InMultiLineString) {
         if (length >= 3 && line[0] == '`' && line[1] == '`' && line[2] == '`') {
             tokens.push_back({0, length, TokenType::Preprocessor});
+            codeLang.clear();
             return LexerState::Normal;
         }
-        tokens.push_back({0, length, TokenType::String});
+        std::unique_ptr<SyntaxLexer> sub(langLexer(codeLang));
+        if (sub) {
+            sub->tokenizeLine(line, length, LexerState::Normal, tokens);
+        } else {
+            tokens.push_back({0, length, TokenType::String});
+        }
         return LexerState::InMultiLineString;
     }
 
     // Fenced code block start
     if (length >= 3 && line[0] == '`' && line[1] == '`' && line[2] == '`') {
+        // Parse language tag after the fence
+        codeLang.clear();
+        int p = 3;
+        while (p < length && (isalnum((unsigned char)line[p]) ||
+                              line[p] == '+' || line[p] == '-' ||
+                              line[p] == '_' || line[p] == '#'))
+            codeLang.push_back(line[p++]);
         tokens.push_back({0, length, TokenType::Preprocessor});
         return LexerState::InMultiLineString;
     }

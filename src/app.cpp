@@ -525,284 +525,69 @@ void TVIDEApp::gotoLine()
 
 void TVIDEApp::findInFiles()
 {
-    TDialog *d = createFindInFilesDialog();
-    // Data layout: searchInput(256) + pathInput(256) + checkboxes(ushort)
-    struct {
-        char search[257]; // TInputLine: 1 byte length prefix + 256 chars
-        char path[257];
-        ushort options;
-    } data;
-    memset(&data, 0, sizeof(data));
+    std::string root;
+    if (ProjectManager::instance().hasProject())
+        root = ProjectManager::instance().getProject().rootPath;
+    else if (fileTreePanel && !fileTreePanel->getCurrentDir().empty())
+        root = fileTreePanel->getCurrentDir();
+    else { char cwd[MAXPATH] = {}; getcwd(cwd, sizeof(cwd)); root = cwd; }
 
-    // Pre-fill path with project or cwd
-    char cwd[MAXPATH] = {};
-    if (fileTreePanel && !fileTreePanel->getCurrentDir().empty())
-        strncpy(cwd, fileTreePanel->getCurrentDir().c_str(), MAXPATH - 1);
-    else
-        getcwd(cwd, sizeof(cwd));
-    strncpy(data.path + 1, cwd, 255);
-    data.path[0] = (char)strlen(data.path + 1);
-    data.options = 0x02; // recursive by default
-
-    if (execDialog(d, &data) == cmOK) {
-        std::string searchText(data.search + 1, (unsigned char)data.search[0]);
-        std::string searchPath(data.path + 1, (unsigned char)data.path[0]);
-        bool caseSensitive = (data.options & 0x01) != 0;
-        bool recursive     = (data.options & 0x02) != 0;
-        bool useRegex      = (data.options & 0x04) != 0;
-
-        if (searchText.empty()) return;
-        if (searchPath.empty()) searchPath = ".";
-
-        if (!messagePanel) toolMessages();
-        if (messagePanel) {
-            messagePanel->clear();
-            messagePanel->addMessage(std::string("Searching for: ") + searchText +
-                (useRegex ? "  [regex]" : "  [literal]") +
-                (caseSensitive ? "  [case]" : "  [icase]"));
-        }
-
-        std::string cmd = "grep -n";
-        if (useRegex) cmd += " -E"; else cmd += " -F";
-        if (!caseSensitive) cmd += " -i";
-        if (recursive) cmd += " -r";
-        cmd += " --include='*.*' -- ";
-        // Escape search text for shell
-        cmd += "'";
-        for (char c : searchText) {
-            if (c == '\'') cmd += "'\\''";
-            else cmd += c;
-        }
-        cmd += "' '";
-        for (char c : searchPath) {
-            if (c == '\'') cmd += "'\\''";
-            else cmd += c;
-        }
-        cmd += "' 2>/dev/null | head -500";
-
-        FILE *fp = popen(cmd.c_str(), "r");
-        if (!fp) {
-            if (messagePanel)
-                messagePanel->addMessage("Error: could not run search.");
-            return;
-        }
-
-        char line[1024];
-        int count = 0;
-        while (fgets(line, sizeof(line), fp)) {
-            // Remove trailing newline
-            int len = strlen(line);
-            if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
-            if (messagePanel)
-                messagePanel->addMessage(line);
-            count++;
-        }
-        pclose(fp);
-
-        if (messagePanel) {
-            char summary[128];
-            snprintf(summary, sizeof(summary), "Found %d match%s.", count, count == 1 ? "" : "es");
-            messagePanel->addMessage(summary);
+    auto *d = new LiveTextSearchDialog(root);
+    TView *p = validView(d);
+    if (!p) return;
+    ushort r = deskTop->execView(p);
+    std::string path = d->resultPath;
+    int line = d->resultLine;
+    TObject::destroy(p);
+    if (r == cmOK && !path.empty()) {
+        auto *w = openEditor(path.c_str(), True);
+        if (w && w->getEditor() && line > 0) {
+            auto *e = w->getEditor();
+            uint pos = 0; int cur = 1;
+            while (pos < e->bufLen && cur < line) {
+                char ch = (pos < (uint)e->curPtr)
+                    ? e->buffer[pos] : e->buffer[pos + e->gapLen];
+                if (ch == '\n') cur++;
+                pos++;
+            }
+            e->setCurPtr(pos, 0);
+            e->trackCursor(True);
         }
     }
 }
 
 // ── Find symbol ─────────────────────────────────────────────────────────
 
-namespace {
-
-bool isSourceExt(const std::string &name)
-{
-    auto dot = name.rfind('.');
-    if (dot == std::string::npos) return false;
-    std::string e = name.substr(dot + 1);
-    for (auto &c : e) c = (char)tolower((unsigned char)c);
-    static const char *exts[] = {
-        "php","phtml","html","htm","css","scss","less",
-        "js","jsx","mjs","ts","tsx","vue",
-        "json","md","markdown","yml","yaml","sql","xml","svg","xsl",
-        "twig","blade","latte", nullptr
-    };
-    for (int i = 0; exts[i]; i++) if (e == exts[i]) return true;
-    return false;
-}
-
-bool shouldSkipDir(const std::string &name)
-{
-    if (name.empty()) return true;
-    if (name[0] == '.') return true;
-    static const char *skip[] = {
-        "node_modules","vendor","build","dist","target","out",
-        "__pycache__","bower_components","coverage", nullptr
-    };
-    for (int i = 0; skip[i]; i++) if (name == skip[i]) return true;
-    return false;
-}
-
-void walkSourceFiles(const std::string &root, std::vector<std::string> &out, int depth = 0)
-{
-    if (depth > 16) return;
-    DIR *d = opendir(root.c_str());
-    if (!d) return;
-    struct dirent *e;
-    while ((e = readdir(d)) != nullptr) {
-        if (e->d_name[0] == '.' &&
-            (e->d_name[1] == '\0' ||
-             (e->d_name[1] == '.' && e->d_name[2] == '\0')))
-            continue;
-        std::string name = e->d_name;
-        std::string full = root + "/" + name;
-        struct stat st;
-        if (stat(full.c_str(), &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) {
-            if (shouldSkipDir(name)) continue;
-            walkSourceFiles(full, out, depth + 1);
-        } else if (S_ISREG(st.st_mode) && isSourceExt(name)) {
-            out.push_back(full);
-        }
-    }
-    closedir(d);
-}
-
-bool readFileToString(const std::string &path, std::string &out, size_t maxBytes = 2 * 1024 * 1024)
-{
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return false;
-    f.seekg(0, std::ios::end);
-    auto sz = (size_t)f.tellg();
-    if (sz > maxBytes) return false;
-    f.seekg(0, std::ios::beg);
-    out.resize(sz);
-    if (sz > 0) f.read(&out[0], sz);
-    return true;
-}
-
-} // namespace
-
 void TVIDEApp::findSymbol()
 {
-    TDialog *d = createFindSymbolDialog();
-    if (!d) return;
-
-    struct {
-        char query[257];
-        char path[257];
-        ushort options;
-    } data;
-    memset(&data, 0, sizeof(data));
-
-    char defPath[MAXPATH] = {};
+    std::string root;
     if (ProjectManager::instance().hasProject())
-        strncpy(defPath, ProjectManager::instance().getProject().rootPath.c_str(), MAXPATH - 1);
+        root = ProjectManager::instance().getProject().rootPath;
     else if (fileTreePanel && !fileTreePanel->getCurrentDir().empty())
-        strncpy(defPath, fileTreePanel->getCurrentDir().c_str(), MAXPATH - 1);
-    else
-        getcwd(defPath, sizeof(defPath));
-    strncpy(data.path + 1, defPath, 255);
-    data.path[0] = (char)strlen(data.path + 1);
-    data.options = 0x02; // recursive default
+        root = fileTreePanel->getCurrentDir();
+    else { char cwd[MAXPATH] = {}; getcwd(cwd, sizeof(cwd)); root = cwd; }
 
-    if (execDialog(d, &data) != cmOK) return;
-
-    std::string query(data.query + 1, (unsigned char)data.query[0]);
-    std::string root(data.path + 1, (unsigned char)data.path[0]);
-    bool caseSensitive = (data.options & 0x01) != 0;
-    bool recursive     = (data.options & 0x02) != 0;
-    bool useRegex      = (data.options & 0x04) != 0;
-
-    if (query.empty()) return;
-    if (root.empty()) root = ".";
-
-    std::regex rx;
-    std::string lowerQuery = query;
-    if (!caseSensitive)
-        for (auto &c : lowerQuery) c = (char)tolower((unsigned char)c);
-    bool rxOk = false;
-    if (useRegex) {
-        try {
-            auto flags = std::regex::ECMAScript;
-            if (!caseSensitive) flags = flags | std::regex::icase;
-            rx = std::regex(query, flags);
-            rxOk = true;
-        } catch (const std::regex_error &) {
-            messageBox("Invalid regular expression.", mfError | mfOKButton);
-            return;
-        }
-    }
-
-    if (!messagePanel) toolMessages();
-    if (messagePanel) {
-        messagePanel->clear();
-        messagePanel->addMessage(std::string("Symbol search: ") + query +
-            (useRegex ? "  [regex]" : "  [literal]") +
-            (caseSensitive ? "  [case]" : "  [icase]") +
-            "  in " + root);
-    }
-
-    std::vector<std::string> files;
-    if (recursive) {
-        walkSourceFiles(root, files);
-    } else {
-        DIR *dr = opendir(root.c_str());
-        if (dr) {
-            struct dirent *e;
-            while ((e = readdir(dr)) != nullptr) {
-                if (e->d_name[0] == '.') continue;
-                std::string name = e->d_name;
-                std::string full = root + "/" + name;
-                struct stat st;
-                if (stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode) && isSourceExt(name))
-                    files.push_back(full);
+    auto *d = new LiveSymbolDialog(root);
+    TView *p = validView(d);
+    if (!p) return;
+    ushort r = deskTop->execView(p);
+    std::string path = d->resultPath;
+    int line = d->resultLine;
+    TObject::destroy(p);
+    if (r == cmOK && !path.empty()) {
+        auto *w = openEditor(path.c_str(), True);
+        if (w && w->getEditor() && line > 0) {
+            auto *e = w->getEditor();
+            uint pos = 0; int cur = 1;
+            while (pos < e->bufLen && cur < line) {
+                char ch = (pos < (uint)e->curPtr)
+                    ? e->buffer[pos] : e->buffer[pos + e->gapLen];
+                if (ch == '\n') cur++;
+                pos++;
             }
-            closedir(dr);
+            e->setCurPtr(pos, 0);
+            e->trackCursor(True);
         }
-    }
-
-    int matches = 0;
-    int filesScanned = 0;
-    for (const auto &path : files) {
-        if (matches >= 1000) break;
-        filesScanned++;
-        std::unique_ptr<SyntaxLexer> lex(SyntaxLexer::createForFile(path));
-        if (!lex) continue;
-        const char *lang = lex->languageName();
-
-        std::string text;
-        if (!readFileToString(path, text)) continue;
-
-        std::vector<SymbolInfo> syms;
-        parseStructureText(lang, text, syms);
-        if (syms.empty()) continue;
-
-        for (const auto &s : syms) {
-            bool hit = false;
-            if (useRegex && rxOk) {
-                hit = std::regex_search(s.name, rx);
-            } else if (caseSensitive) {
-                hit = s.name.find(query) != std::string::npos;
-            } else {
-                std::string lo = s.name;
-                for (auto &c : lo) c = (char)tolower((unsigned char)c);
-                hit = lo.find(lowerQuery) != std::string::npos;
-            }
-            if (!hit) continue;
-
-            char line[1024];
-            snprintf(line, sizeof(line), "%s:%d: [%s] %s",
-                     path.c_str(), s.line, symbolKindName(s.kind), s.name.c_str());
-            if (messagePanel) messagePanel->addMessage(line);
-            matches++;
-            if (matches >= 1000) break;
-        }
-    }
-
-    if (messagePanel) {
-        char summary[128];
-        snprintf(summary, sizeof(summary),
-                 "Found %d symbol%s in %d file%s.",
-                 matches, matches == 1 ? "" : "s",
-                 filesScanned, filesScanned == 1 ? "" : "s");
-        messagePanel->addMessage(summary);
     }
 }
 

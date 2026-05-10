@@ -45,6 +45,7 @@ add_executable(tvide
     src/dialogs/gotoline.cpp
     src/dialogs/findinfiles.cpp
     src/dialogs/findsymbol.cpp
+    src/dialogs/livesearch.cpp
     src/dialogs/openproject.cpp
     src/dialogs/about.cpp
     src/panels/filetree.cpp

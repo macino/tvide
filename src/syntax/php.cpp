@@ -42,6 +42,27 @@ LexerState PhpLexer::tokenizeLine(const char *line, int length,
     int i = 0;
     LexerState state = inState;
 
+    // ── Outside <?php : run HtmlLexer until next <? or <?php ─────────
+    if (state == LexerState::InPhpHtml) {
+        // Find next <?
+        int phpAt = -1;
+        for (int k = 0; k + 1 < length; k++) {
+            if (line[k] == '<' && line[k+1] == '?') { phpAt = k; break; }
+        }
+        int htmlEnd = (phpAt >= 0) ? phpAt : length;
+        if (htmlEnd > 0) {
+            HtmlLexer html;
+            std::vector<Token> sub;
+            html.tokenizeLine(line, htmlEnd, LexerState::Normal, sub);
+            for (auto &t : sub) tokens.push_back(t);
+        }
+        if (phpAt < 0)
+            return state; // still in HTML
+        i = phpAt;
+        state = LexerState::Normal;
+        // fall through to PHP tokenization
+    }
+
     while (i < length) {
         // Handle incoming block comment state
         if (state == LexerState::InBlockComment) {
@@ -97,6 +118,27 @@ LexerState PhpLexer::tokenizeLine(const char *line, int length,
         if (ch == '?' && i + 1 < length && line[i + 1] == '>') {
             tokens.push_back({i, 2, TokenType::PhpDelimiter});
             i += 2;
+            // After ?> the rest of the file is HTML until next <?php.
+            // Tokenize remainder with HtmlLexer and stay in PhpHtml state.
+            int phpAt = -1;
+            for (int k = i; k + 1 < length; k++) {
+                if (line[k] == '<' && line[k+1] == '?') { phpAt = k; break; }
+            }
+            int htmlEnd = (phpAt >= 0) ? phpAt : length;
+            if (htmlEnd > i) {
+                HtmlLexer html;
+                std::vector<Token> sub;
+                html.tokenizeLine(line + i, htmlEnd - i, LexerState::Normal, sub);
+                for (auto &t : sub) {
+                    t.start += i;
+                    tokens.push_back(t);
+                }
+            }
+            if (phpAt < 0) {
+                state = LexerState::InPhpHtml;
+                return state;
+            }
+            i = phpAt;
             continue;
         }
 

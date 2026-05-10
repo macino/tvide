@@ -129,6 +129,11 @@ enum class LexerState {
     InScriptBlock,
     InTemplateLiteral,
     InMultiLineString,
+    // Embedded-language modes (cross-line)
+    InHtmlScript,   // HTML/Vue: between <script> and </script>
+    InHtmlStyle,    // HTML/Vue: between <style> and </style>
+    InPhpHtml,      // PHP file: outside <?php blocks
+    InMdCodeBlock,  // Markdown: inside ``` fenced code
 };
 
 // Base lexer class
@@ -223,6 +228,8 @@ public:
     LexerState tokenizeLine(const char *line, int length,
                             LexerState inState, std::vector<Token> &tokens) override;
     const char *languageName() const override { return "Markdown"; }
+private:
+    std::string codeLang; // current fenced-block language (empty if none / unknown)
 };
 
 class YamlLexer : public SyntaxLexer {

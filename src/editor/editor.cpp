@@ -101,6 +101,8 @@ void TSyntaxEditor::rebuildLineStates()
     if (!lexer || !buffer || bufLen == 0) return;
 
     LexerState state = LexerState::Normal;
+    if (lexer && strcmp(lexer->languageName(), "PHP") == 0)
+        state = LexerState::InPhpHtml; // PHP files start in HTML mode
     uint pos = 0;
     char lineBuf[4096];
 
@@ -131,7 +133,11 @@ void TSyntaxEditor::rebuildLineStates()
 
 LexerState TSyntaxEditor::getStateForLine(int lineNum)
 {
-    if (lineNum <= 0) return LexerState::Normal;
+    if (lineNum <= 0) {
+        if (lexer && strcmp(lexer->languageName(), "PHP") == 0)
+            return LexerState::InPhpHtml;
+        return LexerState::Normal;
+    }
     if (lineStates.empty()) rebuildLineStates();
     if ((size_t)(lineNum - 1) < lineStates.size())
         return lineStates[lineNum - 1];
