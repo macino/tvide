@@ -31,7 +31,63 @@ TSyntaxEditor::TSyntaxEditor(const TRect &bounds,
     std::string fn(aFileName.data(), aFileName.size());
     lexer.reset(SyntaxLexer::createForFile(fn));
     autoIndent = EditorSettings::instance().autoIndent;
+    fileUsesTabs    = EditorSettings::instance().useTabs;
+    fileIndentWidth = EditorSettings::instance().tabSize;
+    detectIndentation();
     updateModTime();
+}
+
+void TSyntaxEditor::detectIndentation()
+{
+    if (bufLen == 0) return;
+
+    int tabIndentLines = 0;
+    int spaceIndentLines = 0;
+    int spaceCounts[33] = {0};
+
+    uint pos = 0;
+    int linesScanned = 0;
+    while (pos < bufLen && linesScanned < 400) {
+        char first = (pos < (uint)curPtr) ? buffer[pos] : buffer[pos + gapLen];
+        if (first == '\t') {
+            tabIndentLines++;
+        } else if (first == ' ') {
+            int cnt = 0;
+            uint p = pos;
+            while (p < bufLen && cnt < 32) {
+                char c = (p < (uint)curPtr) ? buffer[p] : buffer[p + gapLen];
+                if (c != ' ') break;
+                cnt++;
+                p++;
+            }
+            spaceIndentLines++;
+            if (cnt > 0 && cnt < 33) spaceCounts[cnt]++;
+        }
+        // skip to next line
+        while (pos < bufLen) {
+            char c = (pos < (uint)curPtr) ? buffer[pos] : buffer[pos + gapLen];
+            pos++;
+            if (c == '\n') break;
+        }
+        linesScanned++;
+    }
+
+    if (tabIndentLines == 0 && spaceIndentLines == 0) return; // keep defaults
+
+    if (tabIndentLines > spaceIndentLines) {
+        fileUsesTabs = true;
+    } else {
+        fileUsesTabs = false;
+        // Pick the indent width that "explains" the most lines
+        int best = 4, bestScore = -1;
+        for (int w = 2; w <= 8; w++) {
+            int score = 0;
+            for (int j = 1; j < 33; j++)
+                if (j % w == 0) score += spaceCounts[j];
+            if (score > bestScore) { bestScore = score; best = w; }
+        }
+        fileIndentWidth = best;
+    }
 }
 
 TSyntaxEditor::~TSyntaxEditor() {}
@@ -466,12 +522,56 @@ void TSyntaxEditor::handleEvent(TEvent &event)
             return;
         }
 
-        // L6: Tab → insert spaces when useTabs is false
-        if (keyCode == kbTab && !ctrl && !shift && !EditorSettings::instance().useTabs) {
-            int tabSz = EditorSettings::instance().tabSize;
+        // Tab → if file uses spaces, insert <fileIndentWidth> spaces
+        if (keyCode == kbTab && !ctrl && !shift && !fileUsesTabs) {
+            int tabSz = fileIndentWidth > 0 ? fileIndentWidth : 4;
+            if (tabSz > 16) tabSz = 16;
             char spaces[16];
             memset(spaces, ' ', tabSz);
             insertText(spaces, tabSz, False);
+            clearEvent(event);
+            return;
+        }
+
+        // Enter → auto-indent: copy current line's leading whitespace,
+        // and bump one indent level after { ( [ :
+        if (keyCode == kbEnter && !ctrl && !shift &&
+            EditorSettings::instance().autoIndent) {
+            // Collapse selection first (so Enter replaces it)
+            if (selStart < selEnd) deleteSelect();
+
+            // Find start of current line
+            uint ls = curPtr;
+            while (ls > 0) {
+                char c = (ls - 1 < (uint)curPtr)
+                    ? buffer[ls - 1] : buffer[ls - 1 + gapLen];
+                if (c == '\n') break;
+                ls--;
+            }
+            std::string indent;
+            uint p = ls;
+            while (p < curPtr) {
+                char c = (p < (uint)curPtr) ? buffer[p] : buffer[p + gapLen];
+                if (c != ' ' && c != '\t') break;
+                indent.push_back(c);
+                p++;
+            }
+            // Decide whether to bump indent
+            char prev = 0;
+            if (curPtr > 0) {
+                uint q = curPtr - 1;
+                prev = (q < (uint)curPtr) ? buffer[q] : buffer[q + gapLen];
+            }
+            bool bump = (prev == '{' || prev == '(' || prev == '[' || prev == ':');
+
+            std::string toInsert = "\n";
+            toInsert += indent;
+            if (bump) {
+                if (fileUsesTabs) toInsert += '\t';
+                else toInsert += std::string(fileIndentWidth, ' ');
+            }
+            insertText(toInsert.data(), (int)toInsert.size(), False);
+            trackCursor(True);
             clearEvent(event);
             return;
         }

@@ -76,6 +76,12 @@ public:
     void acceptSuggestion(const std::string &text);
     bool suggestPopupActive() const { return suggestPopup != nullptr; }
 
+    // Per-file indentation, detected from the loaded text. Overrides the
+    // global EditorSettings defaults for THIS editor.
+    bool fileUsesTabs = true;
+    int  fileIndentWidth = 4;
+    void detectIndentation();
+
 private:
     std::unique_ptr<SyntaxLexer> lexer;
     long long lastKeystrokeMs = 0;
