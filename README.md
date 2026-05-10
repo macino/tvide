@@ -1,5 +1,7 @@
 # TVIDE — Turbo Vision IDE
 
+**IMPORTANT: This is work in progress and more of a showcase than usable app.**
+
 A modern text-mode IDE for PHP and full-stack web development. Built on
 [**magiblot/tvision 2.0**](https://github.com/magiblot/tvision) — the actively-maintained
 fork of Borland's classic Turbo Vision — and inspired by RHIDE.
